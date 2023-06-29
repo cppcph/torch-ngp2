@@ -11,6 +11,7 @@ class SDFNetwork(nn.Module):
                  skips=[],
                  hidden_dim=64,
                  clip_sdf=None,
+                 activation="ReLU",
                  ):
         super().__init__()
 
@@ -28,7 +29,7 @@ class SDFNetwork(nn.Module):
                 "otype": "HashGrid",
                 "n_levels": 16,
                 "n_features_per_level": 2,
-                "log2_hashmap_size": 19,
+                "log2_hashmap_size": 14,
                 "base_resolution": 16,
                 "per_level_scale": 1.3819,
             },
@@ -39,7 +40,7 @@ class SDFNetwork(nn.Module):
             n_output_dims=1,
             network_config={
                 "otype": "FullyFusedMLP",
-                "activation": "ReLU",
+                "activation": activation,
                 "output_activation": "None",
                 "n_neurons": hidden_dim,
                 "n_hidden_layers": num_layers - 1,
