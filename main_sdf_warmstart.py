@@ -31,7 +31,7 @@ if __name__ == '__main__':
     else:
         from sdf.netowrk import SDFNetwork
 
-    model = SDFNetwork(encoding="hashgrid")
+    model = SDFNetwork(encoding="hashgrid",activation="Softplus")
     print(model)
 
     if opt.test:
@@ -53,7 +53,7 @@ if __name__ == '__main__':
 
         criterion = mape_loss # torch.nn.L1Loss()
 
-        train_dataset_new = SDFDataset(opt.path_new, size=1, num_samples=2**15)
+        train_dataset_new = SDFDataset(opt.path_new, size=100, num_samples=2**15)
         train_loader_new = torch.utils.data.DataLoader(train_dataset_new, batch_size=1, shuffle=True)
 
         valid_dataset_new = SDFDataset(opt.path_new, size=1, num_samples=2**15) # just a dummy
@@ -73,11 +73,11 @@ if __name__ == '__main__':
         scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
         scheduler_new = lambda optimizer_new: optim.lr_scheduler.StepLR(optimizer_new, step_size=10, gamma=0.1)
         time_stamp=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-        name="Test/"+"warmstart_"+time_stamp+"_lr_"+str(opt.lr_new)+opt.path_new.split("/")[-1].split(".")[0]
+        name="Test/"+"warmstart_"+model.activation+time_stamp+"_lr_"+str(opt.lr_new)+opt.path_new.split("/")[-1].split(".")[0]
 
         trainer = Trainer('ngp', model, workspace=opt.workspace+time_stamp, optimizer=optimizer, criterion=criterion, ema_decay=0.95,
                            fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest', eval_interval=1,
-                           use_tensorboardX=False,mesh=train_dataset.mesh)
+                           use_tensorboardX=True,mesh=train_dataset.mesh)
 
         trainer.train(train_loader, valid_loader, 50)
         trainer.save_mesh(os.path.join(opt.workspace, 'results', 'originalcow_output.ply'), 1024)
@@ -86,7 +86,7 @@ if __name__ == '__main__':
                             fp16=opt.fp16, lr_scheduler=scheduler_new, use_checkpoint='latest', eval_interval=1,
                             use_tensorboardX=True,mesh=train_dataset_new.mesh)
         
-        trainer_new.train(train_loader_new, valid_loader_new, 100)
+        trainer_new.train(train_loader_new, valid_loader_new, 1)
 
         # also test
         trainer.save_mesh(os.path.join(opt.workspace, 'results', 'warmstart_original_output_10iteration.ply'), 1024)

@@ -39,10 +39,10 @@ if __name__ == '__main__':
         trainer.save_mesh(os.path.join(opt.workspace, 'results', 'output.ply'), 1024)
 
     else:
-        from sdf.provider import SurfaceDataset,SurfacePerturbedDataset
+        from sdf.provider import SurfaceDataset
         from loss import mape_loss
 
-        opt.path="data/cow.obj"
+        opt.path="data/sinus_cow.obj"
         opt.path_new="data/sinus_cow.obj"
 
         mesh = trimesh.load(opt.path, force='mesh')
@@ -93,21 +93,20 @@ if __name__ == '__main__':
         scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
         scheduler_new = lambda optimizer_new: optim.lr_scheduler.StepLR(optimizer_new, step_size=10, gamma=0.1)
         time_stamp=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-        name0="warmstartwithOriginalCow_OURS_VolumeSample9"
-        name="ReduceSurfaceSample/"+name0+model.activation+time_stamp+"_lr_"+str(opt.lr_new)+opt.path_new.split("/")[-1].split(".")[0]
+        name="coldstart/"+"coldstart_sinuscow_OURS_1time_"+model.activation+time_stamp+"_lr_"+str(opt.lr_new)+opt.path_new.split("/")[-1].split(".")[0]
 
         trainer = TrainerOurs('ngp', model, workspace=name+"Pre", optimizer=optimizer, criterion=criterion, ema_decay=0.95,
                            fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest', eval_interval=1,
-                           use_tensorboardX=True,mesh=train_dataset.mesh,num_volume_samples=2**9)
+                           use_tensorboardX=True,mesh=train_dataset.mesh)
 
         trainer.train(train_loader, train_loader, 50)
-        trainer.save_mesh(os.path.join("ReduceSurfaceSample", 'results', name0,'0.ply'), 1024)
+        trainer.save_mesh(os.path.join("coldstart", 'results', 'output1time.ply'), 1024)
         
-        trainer_new = TrainerOurs('ngp', model, workspace=name, optimizer=optimizer_new, criterion=criterion, ema_decay=0.95,
-                            fp16=opt.fp16, lr_scheduler=scheduler_new, use_checkpoint='latest', eval_interval=1,
-                            use_tensorboardX=True,mesh=train_dataset_new.mesh)
+        # trainer_new = TrainerOurs('ngp', model, workspace=name, optimizer=optimizer_new, criterion=criterion, ema_decay=0.95,
+        #                     fp16=opt.fp16, lr_scheduler=scheduler_new, use_checkpoint='latest', eval_interval=1,
+        #                     use_tensorboardX=True,mesh=train_dataset_new.mesh)
         
-        trainer_new.train(train_loader_new, train_loader_new, 1)
+        # trainer_new.train(train_loader_new, train_loader_new, 1)
 
-        # also test
-        trainer.save_mesh(os.path.join("ReduceSurfaceSample", 'results', name0, '1.ply'), 1024)
+        # # also test
+        # trainer_new.save_mesh(os.path.join(opt.workspace, 'results', 'output_10_iteration.ply'), 1024)
