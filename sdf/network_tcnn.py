@@ -20,6 +20,7 @@ class SDFNetwork(nn.Module):
         self.skips = skips
         self.hidden_dim = hidden_dim
         self.clip_sdf = clip_sdf
+        self.activation = activation
         
         assert self.skips == [], 'TCNN does not support concatenating inside, please use skips=[].'
 

@@ -86,6 +86,240 @@ class SDFDataset(Dataset):
         #plot_pointcloud(points, sdfs)
 
         return results
+    
+class SDFDatasetSubspace(Dataset):
+    def __init__(self, path, size=100, num_samples=2**18, clip_sdf=None):
+        super().__init__()
+        self.path = path
+
+        # load obj 
+        self.mesh = trimesh.load(path, force='mesh')
+
+        # normalize to [-1, 1] (different from instant-sdf where is [0, 1])
+        vs = self.mesh.vertices
+        vmin = vs.min(0)
+        vmax = vs.max(0)
+        v_center = (vmin + vmax) / 2
+        v_scale = 2 / np.sqrt(np.sum((vmax - vmin) ** 2)) * 0.95
+        vs = (vs - v_center[None, :]) * v_scale
+        self.mesh.vertices = vs
+
+        print(f"[INFO] mesh: {self.mesh.vertices.shape} {self.mesh.faces.shape}")
+
+        if not self.mesh.is_watertight:
+            print(f"[WARN] mesh is not watertight! SDF maybe incorrect.")
+        #trimesh.Scene([self.mesh]).show()
+
+        self.sdf_fn = pysdf.SDF(self.mesh.vertices, self.mesh.faces)
+        
+        self.num_samples = num_samples
+        assert self.num_samples % 8 == 0, "num_samples must be divisible by 8."
+        self.clip_sdf = clip_sdf
+
+        self.size = size
+
+    
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, _):
+
+        # online sampling
+        sdfs = np.zeros((self.num_samples, 1))
+        # surface
+        points_surface = self.mesh.sample(self.num_samples * 7 // 8)
+        # perturb surface
+        points_surface[self.num_samples // 2:] += 0.01 * np.random.randn(self.num_samples * 3 // 8, 3)
+        # random
+        points_uniform = np.random.rand(self.num_samples // 8, 3) * 2 - 1
+        points = np.concatenate([points_surface, points_uniform], axis=0).astype(np.float32)
+
+        sdfs[self.num_samples // 2:] = -self.sdf_fn(points[self.num_samples // 2:])[:,None].astype(np.float32)
+ 
+        # clip sdf
+        if self.clip_sdf is not None:
+            sdfs = sdfs.clip(-self.clip_sdf, self.clip_sdf)
+        
+        #make a tensor with size 4 as subsapce vector
+        subspaces= np.zeros((self.num_samples, 4)).astype(np.float32)
+
+        results = {
+            'sdfs': sdfs,
+            'points': points,
+            'subspace':subspaces,
+        }
+
+        #plot_pointcloud(points, sdfs)
+
+        return results
+class DeformationMappingDataset(Dataset):
+    def __init__(self, path, size=100, num_samples=2**15, clip_sdf=None,subspace_size=6):
+        super().__init__()
+        self.path = path
+        self.subspace_size=subspace_size
+        # suffix=["x","y","z","xplus","yplus","zplus",]
+        suffix= ["o","o","o","o","o","o"]
+        vs= None
+        for i in range(6):
+            # load obj 
+            self.mesh = trimesh.load(path+"_"+suffix[i]+".obj", force='mesh')
+            if not self.mesh.is_watertight:
+                print(f"[WARN] mesh is not watertight! SDF maybe incorrect.")
+            #trimesh.Scene([self.mesh]).show()
+
+            # normalize to [-1, 1] (different from instant-sdf where is [0, 1])
+            originalvs = self.mesh.vertices
+
+            #create 6 sets of vertices add perturbation to the vertices
+            if i==0:
+                vs = np.zeros((6,originalvs.shape[0],originalvs.shape[1])) 
+            vs[i] = originalvs
+            vmin = vs[i].min(0)
+            vmax = vs[i].max(0)
+            v_center = (vmin + vmax) / 2
+            v_scale = 2 / np.sqrt(np.sum((vmax - vmin) ** 2)) * 0.95
+            vs[i] = (vs[i] - v_center[None, :]) * v_scale
+
+        #set a list of 100 meshes with vertices randomly interpolated from the 4
+        self.vmesh=[]
+        self.vweights=[]
+        for i in range(100):
+            newmesh=self.mesh.copy()
+            #generate 4 positive float number with sum of 1
+            weights = np.random.dirichlet(np.ones(6),size=1)
+            #make weights float
+            weights= weights.astype(np.float32)
+            #weigh the vertices with the weights
+            x = weights[0][0]*vs[0]+weights[0][1]*vs[1]+weights[0][2]*vs[2]+weights[0][3]*vs[3]+weights[0][4]*vs[4]+weights[0][5]*vs[5]
+            newmesh.vertices = x   
+            self.vweights.append(weights)         
+            self.vmesh.append(newmesh)
+
+        
+        self.num_samples = num_samples
+        assert self.num_samples % 8 == 0, "num_samples must be divisible by 8."
+        self.clip_sdf = clip_sdf
+
+        self.size = size
+    def __len__(self):
+        return self.size
+        
+    def __getitem__(self, _):
+        points_surface = self.mesh.sample(self.num_samples).astype(np.float32)
+        points_mapped= self.mapping_func(points_surface).astype(np.float32)
+        results = {
+            "original":points_surface,
+            "mapped":points_mapped,
+            'subspace':subspaces_all,
+        }
+        return results
+
+
+
+        
+
+
+class SDFDatasetModes(Dataset):
+    def __init__(self, path, size=100, num_samples=2**15, clip_sdf=None,subspace_size=6):
+        super().__init__()
+        self.path = path
+        self.subspace_size=subspace_size
+        # suffix=["x","y","z","xplus","yplus","zplus",]
+        suffix= ["o","o","o","o","o","o"]
+        vs= None
+        for i in range(6):
+            # load obj 
+            self.mesh = trimesh.load(path+"_"+suffix[i]+".obj", force='mesh')
+            if not self.mesh.is_watertight:
+                print(f"[WARN] mesh is not watertight! SDF maybe incorrect.")
+            #trimesh.Scene([self.mesh]).show()
+
+            # normalize to [-1, 1] (different from instant-sdf where is [0, 1])
+            originalvs = self.mesh.vertices
+
+            #create 6 sets of vertices add perturbation to the vertices
+            if i==0:
+                vs = np.zeros((6,originalvs.shape[0],originalvs.shape[1])) 
+            vs[i] = originalvs
+            vmin = vs[i].min(0)
+            vmax = vs[i].max(0)
+            v_center = (vmin + vmax) / 2
+            v_scale = 2 / np.sqrt(np.sum((vmax - vmin) ** 2)) * 0.95
+            vs[i] = (vs[i] - v_center[None, :]) * v_scale
+
+        #set a list of 100 meshes with vertices randomly interpolated from the 4
+        self.vmesh=[]
+        self.vweights=[]
+        for i in range(100):
+            newmesh=self.mesh.copy()
+            #generate 4 positive float number with sum of 1
+            weights = np.random.dirichlet(np.ones(6),size=1)
+            #make weights float
+            weights= weights.astype(np.float32)
+            #weigh the vertices with the weights
+            x = weights[0][0]*vs[0]+weights[0][1]*vs[1]+weights[0][2]*vs[2]+weights[0][3]*vs[3]+weights[0][4]*vs[4]+weights[0][5]*vs[5]
+            newmesh.vertices = x   
+            self.vweights.append(weights)         
+            self.vmesh.append(newmesh)
+
+        
+        self.num_samples = num_samples
+        assert self.num_samples % 8 == 0, "num_samples must be divisible by 8."
+        self.clip_sdf = clip_sdf
+
+        self.size = size
+
+    
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, _):
+
+        #randomly choose 16 meshes to sample
+        meshidx = np.random.randint(0,100,16)
+        #create empty numpy array for the 16 sdfs to concatenate
+        sdfs_all = np.empty((0, 1))
+        #create empty numpy array for the 16 points to concatenate
+        points_all = np.empty((0, 3))
+        #create empty numpy array for the 16 subspaces to concatenate
+        subspaces_all = np.empty((0, self.subspace_size))
+
+        
+        for i in range(16):
+            idx=meshidx[i]
+            sdf_fn = pysdf.SDF(self.vmesh[idx].vertices, self.vmesh[idx].faces)
+            # online sampling
+            sdfs = np.zeros((self.num_samples, 1))
+            # surface
+            points_surface = self.vmesh[idx].sample(self.num_samples * 7 // 8)
+            # perturb surface
+            points_surface[self.num_samples // 2:] += 0.01 * np.random.randn(self.num_samples * 3 // 8, 3)
+            # random
+            points_uniform = np.random.rand(self.num_samples // 8, 3) * 2 - 1
+            points = np.concatenate([points_surface, points_uniform], axis=0).astype(np.float32)
+            sdfs[self.num_samples // 2:] = -sdf_fn(points[self.num_samples // 2:])[:,None].astype(np.float32)
+
+            #repeat the weights according to the numebr of samples to fill the subspace vector
+
+            subspaces = np.repeat(self.vweights[idx],self.num_samples,axis=0).astype(np.float32)
+
+            #concatenate the sdfs,points and the subspaces for all meshes
+            sdfs_all=np.concatenate((sdfs_all,sdfs),axis=0).astype(np.float32)
+            subspaces_all=np.concatenate((subspaces_all,subspaces),axis=0).astype(np.float32)
+            points_all=np.concatenate((points_all,points),axis=0).astype(np.float32)
+ 
+        
+
+        results = {
+            'sdfs': sdfs_all,
+            'points': points_all,
+            'subspace':subspaces_all,
+        }
+
+        #plot_pointcloud(points, sdfs)
+
+        return results
+
 
 class SurfaceDataset(Dataset):
     def __init__(self, path, size=100, num_samples=2**18, max_num_sample=2**22, online_sampling=True, normalize_mesh=True, device: str = "cuda"):
@@ -133,6 +367,109 @@ class SurfaceDataset(Dataset):
                                     (-1, 3, 1))).sum(axis=1))
 
         # gradients = self.mesh.face_normals[triangle_id]
+
+        self.results = {
+            'sdfs': sdfs,
+            'points': points,
+            'gradients':gradients,
+        }
+
+        for key, value in self.results.items():
+            value = value.astype(np.float32)
+            self.results[key] = torch.from_numpy(value).to(self.device)
+
+    def _offline_sampling_(self):
+        # online sampling
+        sdfs = np.zeros((self.max_num_samples, 1))
+        # sample surface
+        points,triangle_id = trimesh.sample.sample_surface_even(self.mesh, self.max_num_samples)
+        #gradients = self.mesh.face_normals[triangle_id]
+        
+        # compute the barycentric coordinates of each sample
+        bary = trimesh.triangles.points_to_barycentric(
+        triangles=self.mesh.triangles[triangle_id], points=points)
+        # interpolate vertex normals from barycentric coordinates
+        gradients = trimesh.unitize((self.mesh.vertex_normals[self.mesh.faces[triangle_id]] *
+                                trimesh.unitize(bary).reshape((-1, 3, 1))).sum(axis=1))
+
+        self.max_results = {
+            'sdfs': sdfs,
+            'points': points,
+            'gradients':gradients,
+        }
+
+    def _random_select_results_(self):
+        if self.max_results is None:
+            self._offline_sampling_()
+        idx = np.random.randint(0,self.max_num_samples,self.num_samples)
+        self.results = {
+            'sdfs': self.max_results['sdfs'][idx],
+            'points': self.max_results['points'][idx],
+            'gradients':self.max_results['gradients'][idx],
+        }
+
+        for key, value in self.results.items():
+            value = value.astype(np.float32)
+            self.results[key] = torch.from_numpy(value).to(self.device)
+
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, _):
+        if self.online_sampling:
+            self._sampling_()
+        else:
+            self._random_select_results_()
+
+        return self.results
+    
+class SurfacePerturbedDataset(Dataset):
+    def __init__(self, path, size=100, num_samples=2**18, max_num_sample=2**22, online_sampling=True, normalize_mesh=True, device: str = "cuda"):
+        super().__init__()
+        self.path = path
+        self.device ="cuda"
+        # load obj 
+        self.mesh = trimesh.load(path, force='mesh')
+
+        # normalize to [-1, 1] (different from instant-sdf where is [0, 1])
+        if normalize_mesh:
+            vs = self.mesh.vertices
+            vmin = vs.min(0)
+            vmax = vs.max(0)
+            v_center = (vmin + vmax) / 2
+            v_scale = 2 / np.sqrt(np.sum((vmax - vmin) ** 2)) * 0.95
+            vs = (vs - v_center[None, :]) * v_scale
+            self.mesh.vertices = vs
+
+        print(f"[INFO] mesh: {self.mesh.vertices.shape} {self.mesh.faces.shape}")
+
+        if not self.mesh.is_watertight:
+            print(f"[WARN] mesh is not watertight! SDF maybe incorrect.")
+
+        self.sdf_fn = pysdf.SDF(self.mesh.vertices, self.mesh.faces)
+        self.num_samples = num_samples
+        self.max_num_samples = max_num_sample
+        self.size = size
+        self.online_sampling= online_sampling
+        if not online_sampling:
+            self._offline_sampling_()
+
+    def _sampling_(self):
+        # online sampling
+        sdfs = np.zeros((self.num_samples, 1))
+        # sample surface
+        points,triangle_id = trimesh.sample.sample_surface_even(self.mesh, self.num_samples)
+        # perturb surface
+        points[self.num_samples // 2:] += 0.01 * np.random.randn(self.num_samples // 2, 3)
+        #compute sdf for perturbed surface
+        sdfs[self.num_samples // 2:] = self.sdf_fn(points[self.num_samples // 2:])
+
+        #find the closest face for each perturbed point
+        closest_face = trimesh.proximity.closest_point(self.mesh, points[self.num_samples // 2:])[1]
+        triangle_id[self.num_samples // 2:] = closest_face
+        # compute the gradient of each sample
+        gradients = self.mesh.face_normals[triangle_id]
 
         self.results = {
             'sdfs': sdfs,
