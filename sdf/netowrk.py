@@ -119,7 +119,10 @@ class SDFNetworkWithSubspaceInput(nn.Module):
             for l in range(self.num_layers_pre):
                 h = self.preencoder[l](h)
                 if l != self.num_layers_pre - 1:
-                    h = F.linear(h, inplace=False)
+                    h = F.elu(h, inplace=False)
+                else:
+                    #resitrict the output to be in the range of [-1,1]
+                    h = torch.tanh(h)
             preencoder_output = h
         else:
             preencoder_output=  x
@@ -132,4 +135,4 @@ class SDFNetworkWithSubspaceInput(nn.Module):
             if l != self.num_layers - 1:
                 h = F.elu(h, inplace=False)
 
-        return h
+        return h,preencoder_output

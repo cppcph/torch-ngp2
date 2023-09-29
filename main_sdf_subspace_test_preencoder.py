@@ -41,13 +41,13 @@ if __name__ == '__main__':
         trainer.save_mesh(os.path.join(opt.workspace, 'results', 'output.ply'), 1024)
 
     else:
-        from sdf.provider import SDFDatasetModes
+        from sdf.provider import SDFDatasetTestPreencoder
         from loss import mape_loss
 
-        train_dataset = SDFDatasetModes("mode/deformed_cow", size=100, num_samples=2**14)
+        train_dataset = SDFDatasetTestPreencoder("mode/deformed_cow", size=100, num_samples=2**14)
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
 
-        valid_dataset = SDFDatasetModes("mode/deformed_cow", size=1, num_samples=2**14) # just a dummy
+        valid_dataset = SDFDatasetTestPreencoder("mode/deformed_cow", size=1, num_samples=2**14) # just a dummy
         valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=1)
 
         criterion = mape_loss # torch.nn.L1Loss()
@@ -63,15 +63,17 @@ if __name__ == '__main__':
         time_stamp=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
         name="WorkSpaceFolder/"+"subspace_by_part_"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
 
-        trainer = TrainerSubspace('ngp', model, workspace=name, optimizer=optimizer, criterion=criterion, ema_decay=0.95,
+        trainer = TrainerTestPreencoder('ngp', model, workspace=name, optimizer=optimizer, criterion=criterion, ema_decay=0.95,
                            fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest',
                             eval_interval=1,use_tensorboardX=True,mesh=train_dataset.mesh)
 
-        trainer.train(train_loader, valid_loader, 40)
+        trainer.train(train_loader, valid_loader, 10)
 
         # also test
         trainer.save_mesh(os.path.join(opt.workspace, 'results', 'sinus_original_output.ply'), 1024)
 
 
         #save model
+        layer_to_save= {'preencoder':model.preencoder.state_dict()}
         torch.save(model.state_dict(), name+".pth")
+        torch.save(layer_to_save, name+"pre.pth")

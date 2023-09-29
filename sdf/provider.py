@@ -210,7 +210,7 @@ class DeformationMappingDataset(Dataset):
         results = {
             "original":points_surface,
             "mapped":points_mapped,
-            'subspace':subspaces_all,
+            # 'subspace':subspaces_all,
         }
         return results
 
@@ -225,8 +225,16 @@ class SDFDatasetModes(Dataset):
         self.path = path
         self.subspace_size=subspace_size
         # suffix=["x","y","z","xplus","yplus","zplus",]
-        suffix= ["o","o","o","o","o","o"]
+        suffix= ["o","o","o","x","x","x"]
         vs= None
+        self.original_mesh = trimesh.load(path+"_o"+".obj", force='mesh')
+        v= self.original_mesh.vertices
+        vmin = v.min(0)
+        vmax = v.max(0)
+        v_center = (vmin + vmax) / 2
+        v_scale = 2 / np.sqrt(np.sum((vmax - vmin) ** 2)) * 0.95
+        self.original_mesh.vertices = (v - v_center[None, :]) * v_scale
+
         for i in range(6):
             # load obj 
             self.mesh = trimesh.load(path+"_"+suffix[i]+".obj", force='mesh')
@@ -282,7 +290,10 @@ class SDFDatasetModes(Dataset):
         #create empty numpy array for the 16 points to concatenate
         points_all = np.empty((0, 3))
         #create empty numpy array for the 16 subspaces to concatenate
-        subspaces_all = np.empty((0, self.subspace_size))
+        subspaces_all = np.empty((0, self.subspace_size))   
+        surfaceflag_all= np.empty((0, 1))
+        reference_points_on_original_mesh_all = np.empty((0, 3))
+
 
         
         for i in range(16):
@@ -290,8 +301,19 @@ class SDFDatasetModes(Dataset):
             sdf_fn = pysdf.SDF(self.vmesh[idx].vertices, self.vmesh[idx].faces)
             # online sampling
             sdfs = np.zeros((self.num_samples, 1))
+            surfaceflag=np.zeros((self.num_samples, 1))
+            surfaceflag[0:self.num_samples//2]=1
+            reference_points_on_original_mesh=np.zeros((self.num_samples, 3))
             # surface
-            points_surface = self.vmesh[idx].sample(self.num_samples * 7 // 8)
+            points_surface,triangle_id = trimesh.sample.sample_surface_even(self.vmesh[idx], self.num_samples* 7 // 8)
+
+            # compute the barycentric coordinates of each sample
+            bary = trimesh.triangles.points_to_barycentric(
+            triangles=self.vmesh[idx].triangles[triangle_id], points=points_surface)
+            # interpolate the position on the original mesh from barycentric coordinates
+            reference_points_on_original_mesh[0:self.num_samples* 7 // 8,:] = (self.original_mesh.vertices[self.original_mesh.faces[triangle_id]] *
+                                bary.reshape((-1, 3, 1))).sum(axis=1)
+
             # perturb surface
             points_surface[self.num_samples // 2:] += 0.01 * np.random.randn(self.num_samples * 3 // 8, 3)
             # random
@@ -307,6 +329,9 @@ class SDFDatasetModes(Dataset):
             sdfs_all=np.concatenate((sdfs_all,sdfs),axis=0).astype(np.float32)
             subspaces_all=np.concatenate((subspaces_all,subspaces),axis=0).astype(np.float32)
             points_all=np.concatenate((points_all,points),axis=0).astype(np.float32)
+            surfaceflag_all=np.concatenate((surfaceflag_all,surfaceflag),axis=0).astype(np.float32)
+            reference_points_on_original_mesh_all=np.concatenate((reference_points_on_original_mesh_all,reference_points_on_original_mesh),
+                                                                 axis=0).astype(np.float32)
  
         
 
@@ -314,12 +339,142 @@ class SDFDatasetModes(Dataset):
             'sdfs': sdfs_all,
             'points': points_all,
             'subspace':subspaces_all,
+            'surface_flag':surfaceflag_all,
+            'reference_points_on_original_mesh':reference_points_on_original_mesh_all,
         }
 
         #plot_pointcloud(points, sdfs)
 
         return results
 
+class SDFDatasetTestPreencoder(Dataset):
+    def __init__(self, path, size=100, num_samples=2**15, clip_sdf=None,subspace_size=6):
+        super().__init__()
+        self.path = path
+        self.subspace_size=subspace_size
+        # suffix=["x","y","z","xplus","yplus","zplus",]
+        suffix= ["o","o","o","y","y","y"]
+        vs= None
+        self.original_mesh = trimesh.load(path+"_o"+".obj", force='mesh')
+        v= self.original_mesh.vertices
+        vmin = v.min(0)
+        vmax = v.max(0)
+        v_center = (vmin + vmax) / 2
+        v_scale = 2 / np.sqrt(np.sum((vmax - vmin) ** 2)) * 0.95
+        self.original_mesh.vertices = (v - v_center[None, :]) * v_scale
+
+        for i in range(6):
+            # load obj 
+            self.mesh = trimesh.load(path+"_"+suffix[i]+".obj", force='mesh')
+            if not self.mesh.is_watertight:
+                print(f"[WARN] mesh is not watertight! SDF maybe incorrect.")
+            #trimesh.Scene([self.mesh]).show()
+
+            # normalize to [-1, 1] (different from instant-sdf where is [0, 1])
+            originalvs = self.mesh.vertices
+
+            #create 6 sets of vertices add perturbation to the vertices
+            if i==0:
+                vs = np.zeros((6,originalvs.shape[0],originalvs.shape[1])) 
+            vs[i] = originalvs
+            vmin = vs[i].min(0)
+            vmax = vs[i].max(0)
+            v_center = (vmin + vmax) / 2
+            v_scale = 2 / np.sqrt(np.sum((vmax - vmin) ** 2)) * 0.95
+            vs[i] = (vs[i] - v_center[None, :]) * v_scale
+            self.vs=vs
+
+        #set a list of 100 meshes with vertices randomly interpolated from the 4
+        self.vmesh=[]
+        self.vweights=[]
+        for i in range(100):
+            newmesh=self.mesh.copy()
+            #generate 4 positive float number with sum of 1
+            weights = np.random.dirichlet(np.ones(6),size=1)
+            #make weights float
+            weights= weights.astype(np.float32)
+            #weigh the vertices with the weights
+            x = weights[0][0]*vs[0]+weights[0][1]*vs[1]+weights[0][2]*vs[2]+weights[0][3]*vs[3]+weights[0][4]*vs[4]+weights[0][5]*vs[5]
+            newmesh.vertices = x   
+            self.vweights.append(weights)         
+            self.vmesh.append(newmesh)
+
+        
+        self.num_samples = num_samples
+        assert self.num_samples % 8 == 0, "num_samples must be divisible by 8."
+        self.clip_sdf = clip_sdf
+
+        self.size = size
+
+    
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, _):
+
+        #randomly choose 16 meshes to sample
+        meshidx = np.random.randint(0,100,16)
+        #create empty numpy array for the 16 sdfs to concatenate
+        sdfs_all = np.empty((0, 1))
+        #create empty numpy array for the 16 points to concatenate
+        points_all = np.empty((0, 3))
+        #create empty numpy array for the 16 subspaces to concatenate
+        subspaces_all = np.empty((0, self.subspace_size))   
+        surfaceflag_all= np.empty((0, 1))
+        reference_points_on_original_mesh_all = np.empty((0, 3))
+
+
+        
+        for i in range(16):
+            idx=meshidx[i]
+            sdf_fn = pysdf.SDF(self.vmesh[idx].vertices, self.vmesh[idx].faces)
+            # online sampling
+            sdfs = np.zeros((self.num_samples, 1))
+            surfaceflag=np.zeros((self.num_samples, 1))
+            surfaceflag[:]=1
+            reference_points_on_original_mesh=np.zeros((self.num_samples, 3))
+            # surface
+            points_surface,triangle_id = trimesh.sample.sample_surface_even(self.vmesh[idx], self.num_samples)
+
+            # compute the barycentric coordinates of each sample
+            bary = trimesh.triangles.points_to_barycentric(
+            triangles=self.vmesh[idx].triangles[triangle_id], points=points_surface)
+            # interpolate the position on the original mesh from barycentric coordinates
+            reference_points_on_original_mesh[0:self.num_samples,:] = (self.original_mesh.vertices[self.original_mesh.faces[triangle_id]] *
+                                bary.reshape((-1, 3, 1))).sum(axis=1)
+
+            # perturb surface
+            # points_surface[self.num_samples // 2:] += 0.01 * np.random.randn(self.num_samples * 3 // 8, 3)
+            # random
+            # points_uniform = np.random.rand(self.num_samples // 8, 3) * 2 - 1
+            # points = np.concatenate([points_surface, points_uniform], axis=0).astype(np.float32)
+            # sdfs[self.num_samples // 2:] = -sdf_fn(points[self.num_samples // 2:])[:,None].astype(np.float32)
+
+            #repeat the weights according to the numebr of samples to fill the subspace vector
+
+            subspaces = np.repeat(self.vweights[idx],self.num_samples,axis=0).astype(np.float32)
+
+            #concatenate the sdfs,points and the subspaces for all meshes
+            sdfs_all=np.concatenate((sdfs_all,sdfs),axis=0).astype(np.float32)
+            subspaces_all=np.concatenate((subspaces_all,subspaces),axis=0).astype(np.float32)
+            points_all=np.concatenate((points_all,points_surface),axis=0).astype(np.float32)
+            surfaceflag_all=np.concatenate((surfaceflag_all,surfaceflag),axis=0).astype(np.float32)
+            reference_points_on_original_mesh_all=np.concatenate((reference_points_on_original_mesh_all,reference_points_on_original_mesh),
+                                                                 axis=0).astype(np.float32)
+ 
+        
+
+        results = {
+            'sdfs': sdfs_all,
+            'points': points_all,
+            'subspace':subspaces_all,
+            'surface_flag':surfaceflag_all,
+            'reference_points_on_original_mesh':reference_points_on_original_mesh_all,
+        }
+
+        #plot_pointcloud(points, sdfs)
+
+        return results
 
 class SurfaceDataset(Dataset):
     def __init__(self, path, size=100, num_samples=2**18, max_num_sample=2**22, online_sampling=True, normalize_mesh=True, device: str = "cuda"):
