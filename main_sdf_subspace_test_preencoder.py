@@ -31,10 +31,10 @@ if __name__ == '__main__':
     else:
         from sdf.netowrk import SDFNetwork,SDFNetworkWithSubspaceInput
 
-    model = SDFNetworkWithSubspaceInput(encoding="hashgrid",num_layers=5,num_layers_pre=5, subspace_size=6)
+    model = SDFNetworkWithSubspaceInput(encoding="hashgrid",num_layers=5,num_layers_pre=6, subspace_size=7)
     #load model
-    model.load_state_dict(torch.load("WorkSpaceFolder/original.pth"))
-    print(model)
+    # model.load_state_dict(torch.load("WorkSpaceFolder/original.pth"))
+    # print(model)
 
     if opt.test:
         trainer = Trainer('ngp', model, workspace=opt.workspace, fp16=opt.fp16, use_checkpoint='best', eval_interval=1)
@@ -44,10 +44,10 @@ if __name__ == '__main__':
         from sdf.provider import SDFDatasetTestPreencoder
         from loss import mape_loss
 
-        train_dataset = SDFDatasetTestPreencoder("mode/deformed_cow", size=100, num_samples=2**14)
+        train_dataset = SDFDatasetTestPreencoder("mode/deformed_cow", size=100, num_samples=2**10)
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
 
-        valid_dataset = SDFDatasetTestPreencoder("mode/deformed_cow", size=1, num_samples=2**14) # just a dummy
+        valid_dataset = SDFDatasetTestPreencoder("mode/deformed_cow", size=1, num_samples=2**10) # just a dummy
         valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=1)
 
         criterion = mape_loss # torch.nn.L1Loss()
@@ -67,10 +67,10 @@ if __name__ == '__main__':
                            fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest',
                             eval_interval=1,use_tensorboardX=True,mesh=train_dataset.mesh)
 
-        trainer.train(train_loader, valid_loader, 10)
+        trainer.train(train_loader, valid_loader, 100)
 
         # also test
-        trainer.save_mesh(os.path.join(opt.workspace, 'results', 'sinus_original_output.ply'), 1024)
+        # trainer.save_mesh(os.path.join(opt.workspace, 'results', 'sinus_original_output.ply'), 1024)
 
 
         #save model

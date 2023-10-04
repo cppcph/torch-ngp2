@@ -31,9 +31,9 @@ if __name__ == '__main__':
     else:
         from sdf.netowrk import SDFNetwork,SDFNetworkWithSubspaceInput
 
-    model = SDFNetworkWithSubspaceInput(encoding="hashgrid",num_layers=5,num_layers_pre=5, subspace_size=6)
+    model = SDFNetworkWithSubspaceInput(encoding="hashgrid",num_layers=5,num_layers_pre=6, subspace_size=7)
     #load model
-    model.load_state_dict(torch.load("WorkSpaceFolder/PreencoderTrainedY.pth"))
+    model.load_state_dict(torch.load("WorkSpaceFolder/oct37.pth"))
     print(model)
     model.to("cuda")
     #Generate point cloud of deformed cow
@@ -48,13 +48,13 @@ if __name__ == '__main__':
     newmesh=dataset.mesh.copy()
     #generate 4 positive float number with sum of 1
     # weights = np.random.dirichlet(np.ones(6),size=1)
-    weights= np.array([[0,0,0,0,0,1]])
+    # weights= np.array([[0,0,0,0,0,1]])
+    weights= np.array([[0,0,0,0,1,0,0]])
     #make weights float
     weights= weights.astype(np.float32)
     #weigh the vertices with the weights
-    x = weights[0][0]*vs[0]+weights[0][1]*vs[1]+weights[0][2]*vs[2]+weights[0][3]*vs[3]+weights[0][4]*vs[4]+weights[0][5]*vs[5]
+    x = sum([weights[0][i]*vs[i] for i in range(len(vs))])
     newmesh.vertices = x 
-
    
 
     #points with a fixed distance to the surface
@@ -62,9 +62,8 @@ if __name__ == '__main__':
     vertex_normals = newmesh.vertex_normals
 
     # Offset each vertex along its normal
-    distance = 0.1
+    distance = 0.0
     newmesh.vertices += vertex_normals * distance
-
     points_surface,triangle_id = trimesh.sample.sample_surface_even(newmesh, 5000)
 
     #create the subspace vector with the weights
@@ -88,6 +87,9 @@ if __name__ == '__main__':
     ax.axes.set_ylim3d(bottom=-1, top=1) 
     ax.axes.set_zlim3d(bottom=-1, top=1) 
 
+    #fix the perspective of the plot
+    ax.view_init(elev=135, azim=-95)
+
     # Plot the points
     # ax.scatter(points_canonical[:, 0], points_canonical[:, 1], points_canonical[:, 2],marker='.')
     ax.scatter(points_surface[:, 0], points_surface[:, 1], points_surface[:, 2],marker='.')
@@ -105,6 +107,9 @@ if __name__ == '__main__':
     ax1.axes.set_xlim3d(left=-1, right=1) 
     ax1.axes.set_ylim3d(bottom=-1, top=1) 
     ax1.axes.set_zlim3d(bottom=-1, top=1) 
+
+    #fix the perspective of the plot
+    ax1.view_init(elev=135, azim=-95)
 
     # Plot the points
     ax1.scatter(points_canonical[:, 0], points_canonical[:, 1], points_canonical[:, 2],marker='.')
