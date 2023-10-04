@@ -348,12 +348,13 @@ class SDFDatasetModes(Dataset):
         return results
 
 class SDFDatasetTestPreencoder(Dataset):
-    def __init__(self, path, size=100, num_samples=2**15, clip_sdf=None,subspace_size=6):
+    def __init__(self, path, size=100, num_samples=2**15, clip_sdf=None,subspace_size=7,subspace_suffix=["o","x","y","z","xplus","yplus","zplus"]):
         super().__init__()
         self.path = path
         self.subspace_size=subspace_size
         # suffix=["x","y","z","xplus","yplus","zplus",]
-        suffix= ["o","o","o","y","y","y"]
+        suffix= subspace_suffix
+        assert(len(suffix)==subspace_size)
         vs= None
         self.original_mesh = trimesh.load(path+"_o"+".obj", force='mesh')
         v= self.original_mesh.vertices
@@ -363,7 +364,13 @@ class SDFDatasetTestPreencoder(Dataset):
         v_scale = 2 / np.sqrt(np.sum((vmax - vmin) ** 2)) * 0.95
         self.original_mesh.vertices = (v - v_center[None, :]) * v_scale
 
-        for i in range(6):
+        self.num_samples = num_samples
+        assert self.num_samples % 8 == 0, "num_samples must be divisible by 8."
+        self.clip_sdf = clip_sdf
+
+        self.size = size
+
+        for i in range(subspace_size):
             # load obj 
             self.mesh = trimesh.load(path+"_"+suffix[i]+".obj", force='mesh')
             if not self.mesh.is_watertight:
@@ -373,9 +380,8 @@ class SDFDatasetTestPreencoder(Dataset):
             # normalize to [-1, 1] (different from instant-sdf where is [0, 1])
             originalvs = self.mesh.vertices
 
-            #create 6 sets of vertices add perturbation to the vertices
             if i==0:
-                vs = np.zeros((6,originalvs.shape[0],originalvs.shape[1])) 
+                vs = np.zeros((subspace_size,originalvs.shape[0],originalvs.shape[1])) 
             vs[i] = originalvs
             vmin = vs[i].min(0)
             vmax = vs[i].max(0)
@@ -387,33 +393,6 @@ class SDFDatasetTestPreencoder(Dataset):
         #set a list of 100 meshes with vertices randomly interpolated from the 4
         self.vmesh=[]
         self.vweights=[]
-        for i in range(100):
-            newmesh=self.mesh.copy()
-            #generate 4 positive float number with sum of 1
-            weights = np.random.dirichlet(np.ones(6),size=1)
-            #make weights float
-            weights= weights.astype(np.float32)
-            #weigh the vertices with the weights
-            x = weights[0][0]*vs[0]+weights[0][1]*vs[1]+weights[0][2]*vs[2]+weights[0][3]*vs[3]+weights[0][4]*vs[4]+weights[0][5]*vs[5]
-            newmesh.vertices = x   
-            self.vweights.append(weights)         
-            self.vmesh.append(newmesh)
-
-        
-        self.num_samples = num_samples
-        assert self.num_samples % 8 == 0, "num_samples must be divisible by 8."
-        self.clip_sdf = clip_sdf
-
-        self.size = size
-
-    
-    def __len__(self):
-        return self.size
-
-    def __getitem__(self, _):
-
-        #randomly choose 16 meshes to sample
-        meshidx = np.random.randint(0,100,16)
         #create empty numpy array for the 16 sdfs to concatenate
         sdfs_all = np.empty((0, 1))
         #create empty numpy array for the 16 points to concatenate
@@ -422,37 +401,36 @@ class SDFDatasetTestPreencoder(Dataset):
         subspaces_all = np.empty((0, self.subspace_size))   
         surfaceflag_all= np.empty((0, 1))
         reference_points_on_original_mesh_all = np.empty((0, 3))
+        for i in range(64):
+            newmesh=self.mesh.copy()
+            #generate 4 positive float number with sum of 1
+            weights = np.random.dirichlet(np.ones(subspace_size),size=1)
+            #make weights float
+            weights= weights.astype(np.float32)
+            #weigh the vertices with the weights
+            x = sum(weights[0][j] * vs[j] for j in range(len(vs)))
 
-
-        
-        for i in range(16):
-            idx=meshidx[i]
-            sdf_fn = pysdf.SDF(self.vmesh[idx].vertices, self.vmesh[idx].faces)
-            # online sampling
-            sdfs = np.zeros((self.num_samples, 1))
-            surfaceflag=np.zeros((self.num_samples, 1))
+            newmesh.vertices = x   
+            self.vweights.append(weights)         
+            self.vmesh.append(newmesh)
+            sdf_fn = pysdf.SDF(self.vmesh[i].vertices, self.vmesh[i].faces)
+            # offline sampling
+            offline_sample_size=2**15
+            sdfs = np.zeros((offline_sample_size, 1))
+            surfaceflag=np.zeros((offline_sample_size, 1))
             surfaceflag[:]=1
-            reference_points_on_original_mesh=np.zeros((self.num_samples, 3))
+            reference_points_on_original_mesh=np.zeros((offline_sample_size, 3))
             # surface
-            points_surface,triangle_id = trimesh.sample.sample_surface_even(self.vmesh[idx], self.num_samples)
+            points_surface,triangle_id = trimesh.sample.sample_surface_even(self.vmesh[i], offline_sample_size)
 
             # compute the barycentric coordinates of each sample
             bary = trimesh.triangles.points_to_barycentric(
-            triangles=self.vmesh[idx].triangles[triangle_id], points=points_surface)
+            triangles=self.vmesh[i].triangles[triangle_id], points=points_surface)
             # interpolate the position on the original mesh from barycentric coordinates
-            reference_points_on_original_mesh[0:self.num_samples,:] = (self.original_mesh.vertices[self.original_mesh.faces[triangle_id]] *
+            reference_points_on_original_mesh[0:offline_sample_size,:] = (self.original_mesh.vertices[self.original_mesh.faces[triangle_id]] *
                                 bary.reshape((-1, 3, 1))).sum(axis=1)
-
-            # perturb surface
-            # points_surface[self.num_samples // 2:] += 0.01 * np.random.randn(self.num_samples * 3 // 8, 3)
-            # random
-            # points_uniform = np.random.rand(self.num_samples // 8, 3) * 2 - 1
-            # points = np.concatenate([points_surface, points_uniform], axis=0).astype(np.float32)
-            # sdfs[self.num_samples // 2:] = -sdf_fn(points[self.num_samples // 2:])[:,None].astype(np.float32)
-
-            #repeat the weights according to the numebr of samples to fill the subspace vector
-
-            subspaces = np.repeat(self.vweights[idx],self.num_samples,axis=0).astype(np.float32)
+            
+            subspaces = np.repeat(self.vweights[i],offline_sample_size,axis=0).astype(np.float32)
 
             #concatenate the sdfs,points and the subspaces for all meshes
             sdfs_all=np.concatenate((sdfs_all,sdfs),axis=0).astype(np.float32)
@@ -461,18 +439,36 @@ class SDFDatasetTestPreencoder(Dataset):
             surfaceflag_all=np.concatenate((surfaceflag_all,surfaceflag),axis=0).astype(np.float32)
             reference_points_on_original_mesh_all=np.concatenate((reference_points_on_original_mesh_all,reference_points_on_original_mesh),
                                                                  axis=0).astype(np.float32)
- 
-        
-
-        results = {
+            self.results = {
             'sdfs': sdfs_all,
             'points': points_all,
             'subspace':subspaces_all,
             'surface_flag':surfaceflag_all,
             'reference_points_on_original_mesh':reference_points_on_original_mesh_all,
         }
+        
+       
 
-        #plot_pointcloud(points, sdfs)
+    
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, _):
+
+        #randomly choose samples from self.result
+        idx = np.random.randint(0,self.results['points'].shape[0],self.num_samples)
+        sdfs=self.results['sdfs'][idx]
+        points=self.results['points'][idx]
+        subspaces=self.results['subspace'][idx]
+        surfaceflag=self.results['surface_flag'][idx]
+        reference_points_on_original_mesh=self.results['reference_points_on_original_mesh'][idx]
+        results = {
+            'sdfs': sdfs,
+            'points': points,
+            'subspace':subspaces,
+            'surface_flag':surfaceflag,
+            'reference_points_on_original_mesh':reference_points_on_original_mesh,
+        }
 
         return results
 

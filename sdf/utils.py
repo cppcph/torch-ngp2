@@ -2043,78 +2043,95 @@ class TrainerTestPreencoder(object):
 
 
     def evaluate_one_epoch(self, loader):
-        # self.log(f"++> Evaluate at epoch {self.epoch} ...")
+        self.log(f"++> Evaluate at epoch {self.epoch} ...")
 
-        # total_loss = 0
-        # if self.local_rank == 0:
-        #     for metric in self.metrics:
-        #         metric.clear()
+        total_loss = 0
+        total_loss_sd = 0
+        total_loss_warping = 0
+        
+        if self.local_rank == 0:
+            for metric in self.metrics:
+                metric.clear()
 
-        # self.model.eval()
+        self.model.eval()
 
-        # if self.local_rank == 0:
-        #     pbar = tqdm.tqdm(total=len(loader) * loader.batch_size, bar_format='{desc}: {percentage:3.0f}% {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
+        if self.local_rank == 0:
+            pbar = tqdm.tqdm(total=len(loader) * loader.batch_size, bar_format='{desc}: {percentage:3.0f}% {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
 
-        # with torch.no_grad():
-        #     self.local_step = 0
-        #     for data in loader:    
-        #         self.local_step += 1
+        with torch.no_grad():
+            self.local_step = 0
+            for data in loader:    
+                self.local_step += 1
                 
-        #         data = self.prepare_data(data)
+                data = self.prepare_data(data)
 
-        #         if self.ema is not None:
-        #             self.ema.store()
-        #             self.ema.copy_to()
+                if self.ema is not None:
+                    self.ema.store()
+                    self.ema.copy_to()
             
-        #         with torch.cuda.amp.autocast(enabled=self.fp16):
-        #             preds, truths, loss, _, _= self.eval_step(data)
+                with torch.cuda.amp.autocast(enabled=self.fp16):
+                    preds, truths, loss, loss_sd, loss_warping= self.eval_step(data)
 
-        #         if self.ema is not None:
-        #             self.ema.restore()
+                if self.ema is not None:
+                    self.ema.restore()
                 
-        #         # all_gather/reduce the statistics (NCCL only support all_*)
-        #         if self.world_size > 1:
-        #             dist.all_reduce(loss, op=dist.ReduceOp.SUM)
-        #             loss = loss / self.world_size
+                # all_gather/reduce the statistics (NCCL only support all_*)
+                if self.world_size > 1:
+                    dist.all_reduce(loss, op=dist.ReduceOp.SUM)
+                    loss = loss / self.world_size
                     
-        #             preds_list = [torch.zeros_like(preds).to(self.device) for _ in range(self.world_size)] # [[B, ...], [B, ...], ...]
-        #             dist.all_gather(preds_list, preds)
-        #             preds = torch.cat(preds_list, dim=0)
+                    preds_list = [torch.zeros_like(preds).to(self.device) for _ in range(self.world_size)] # [[B, ...], [B, ...], ...]
+                    dist.all_gather(preds_list, preds)
+                    preds = torch.cat(preds_list, dim=0)
 
-        #             truths_list = [torch.zeros_like(truths).to(self.device) for _ in range(self.world_size)] # [[B, ...], [B, ...], ...]
-        #             dist.all_gather(truths_list, truths)
-        #             truths = torch.cat(truths_list, dim=0)
+                    truths_list = [torch.zeros_like(truths).to(self.device) for _ in range(self.world_size)] # [[B, ...], [B, ...], ...]
+                    dist.all_gather(truths_list, truths)
+                    truths = torch.cat(truths_list, dim=0)
 
-        #         loss_val = loss.item()
-        #         total_loss += loss_val
+                loss_val = loss.item()
+                total_loss += loss_val
 
-        #         # only rank = 0 will perform evaluation.
-        #         if self.local_rank == 0:
+                loss_sd_val = loss_sd.item()
+                loss_warping_val = loss_warping.item()
 
-        #             for metric in self.metrics:
-        #                 metric.update(preds, truths)
+                total_loss_sd += loss_sd_val
+                total_loss_warping += loss_warping_val
 
-        #             pbar.set_description(f"loss={loss_val:.4f} ({total_loss/self.local_step:.4f})")
-        #             pbar.update(loader.batch_size)
 
-        # average_loss = total_loss / self.local_step
-        # self.stats["valid_loss"].append(average_loss)
+                # only rank = 0 will perform evaluation.
+                if self.local_rank == 0:
 
-        # if self.local_rank == 0:
-        #     pbar.close()
-        #     if not self.use_loss_as_metric and len(self.metrics) > 0:
-        #         result = self.metrics[0].measure()
-        #         self.stats["results"].append(result if self.best_mode == 'min' else - result) # if max mode, use -result
-        #     else:
-        #         self.stats["results"].append(average_loss) # if no metric, choose best by min loss
+                    for metric in self.metrics:
+                        metric.update(preds, truths)
 
-        #     for metric in self.metrics:
-        #         self.log(metric.report(), style="blue")
-        #         if self.use_tensorboardX:
-        #             metric.write(self.writer, self.epoch, prefix="evaluate")
-        #         metric.clear()
+                    pbar.set_description(f"loss={loss_val:.4f} ({total_loss/self.local_step:.4f})")
+                    pbar.update(loader.batch_size)
 
-        # self.log(f"++> Evaluate epoch {self.epoch} Finished.")
+        average_loss = total_loss / self.local_step
+        average_loss_sd = total_loss_sd / self.local_step
+        average_loss_warping = total_loss_warping / self.local_step
+
+        self.stats["valid_loss"].append(average_loss)
+        if self.use_tensorboardX and self.local_rank == 0:
+            self.writer.add_scalar("evaluate/loss", average_loss, self.epoch)
+            self.writer.add_scalar("evaluate/loss_sd", average_loss_sd, self.epoch)
+            self.writer.add_scalar("evaluate/loss_warping", average_loss_warping, self.epoch)
+
+        if self.local_rank == 0:
+            pbar.close()
+            if not self.use_loss_as_metric and len(self.metrics) > 0:
+                result = self.metrics[0].measure()
+                self.stats["results"].append(result if self.best_mode == 'min' else - result) # if max mode, use -result
+            else:
+                self.stats["results"].append(average_loss) # if no metric, choose best by min loss
+
+            for metric in self.metrics:
+                self.log(metric.report(), style="blue")
+                if self.use_tensorboardX:
+                    metric.write(self.writer, self.epoch, prefix="evaluate")
+                metric.clear()
+
+        self.log(f"++> Evaluate epoch {self.epoch} Finished.")
         return 0
 
     def save_checkpoint(self, full=False, best=False):
