@@ -10,7 +10,7 @@ if __name__ == '__main__':
     parser.add_argument('--test', action='store_true', help="test mode")
     parser.add_argument('--workspace', type=str, default='workspace')
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--lr', type=float, default=1e-3, help="initial learning rate")
+    parser.add_argument('--lr', type=float, default=1e-2, help="initial learning rate")
     parser.add_argument('--fp16', action='store_true', help="use amp mixed precision training")
     parser.add_argument('--ff', action='store_true', help="use fully-fused MLP")
     parser.add_argument('--tcnn', action='store_true', help="use TCNN backend")
@@ -31,7 +31,7 @@ if __name__ == '__main__':
     else:
         from sdf.netowrk import SDFNetwork,SDFNetworkWithSubspaceInput
 
-    model = SDFNetworkWithSubspaceInput(encoding="hashgrid",num_layers=5,num_layers_pre=6, subspace_size=7)
+    model = SDFNetworkWithSubspaceInput(encoding="hashgrid",num_layers=5,num_layers_pre=5, subspace_size=7)
     #load model
     # model.load_state_dict(torch.load("WorkSpaceFolder/original.pth"))
     # print(model)
@@ -59,7 +59,7 @@ if __name__ == '__main__':
             
         ], lr=opt.lr, betas=(0.9, 0.99), eps=1e-15)
 
-        scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.5)
+        scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
         time_stamp=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
         name="WorkSpaceFolder/"+"subspace_by_part_"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
 

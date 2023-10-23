@@ -33,7 +33,7 @@ if __name__ == '__main__':
 
     model = SDFNetworkWithSubspaceInput(encoding="hashgrid",num_layers=5,num_layers_pre=6, subspace_size=7)
     #load model
-    model.load_state_dict(torch.load("WorkSpaceFolder/oct37.pth"))
+    model.load_state_dict(torch.load("WorkSpaceFolder/oct52canonical.pth"))
     print(model)
     model.to("cuda")
     #Generate point cloud of deformed cow
@@ -49,14 +49,14 @@ if __name__ == '__main__':
     #generate 4 positive float number with sum of 1
     # weights = np.random.dirichlet(np.ones(6),size=1)
     # weights= np.array([[0,0,0,0,0,1]])
-    weights= np.array([[0,0,0,0,1,0,0]])
+    weights= np.array([[1,1,1,1,1,1,1]])/7
+    descriptor="m"
     #make weights float
     weights= weights.astype(np.float32)
     #weigh the vertices with the weights
     x = sum([weights[0][i]*vs[i] for i in range(len(vs))])
     newmesh.vertices = x 
    
-
     #points with a fixed distance to the surface
     # Get the vertex normals
     vertex_normals = newmesh.vertex_normals
@@ -77,18 +77,27 @@ if __name__ == '__main__':
     #convert the points back to numpy
     points_canonical = points_canonical.cpu().detach().numpy()
 
+    #the ground truth for the cononical points
+    bary = trimesh.triangles.points_to_barycentric(
+            triangles=newmesh.triangles[triangle_id], points=points_surface)
+    
+    points_gt= (dataset.original_mesh.vertices[dataset.original_mesh.faces[triangle_id]]*
+                                bary.reshape(-1,3,1)).sum(axis=1)
+    
+
 
     #plot points on the surface
+   
     import matplotlib.pyplot as plt
     # Create a 3D plot
-    fig = plt.figure()
+    fig = plt.figure(figsize=(12, 10))
     ax = fig.add_subplot(111, projection='3d')
     ax.axes.set_xlim3d(left=-1, right=1) 
     ax.axes.set_ylim3d(bottom=-1, top=1) 
     ax.axes.set_zlim3d(bottom=-1, top=1) 
 
     #fix the perspective of the plot
-    ax.view_init(elev=135, azim=-95)
+    ax.view_init(elev=122, azim=-90)
 
     # Plot the points
     # ax.scatter(points_canonical[:, 0], points_canonical[:, 1], points_canonical[:, 2],marker='.')
@@ -98,18 +107,22 @@ if __name__ == '__main__':
     ax.set_ylabel('Y Label')
     ax.set_zlabel('Z Label')
 
-    # Show the plot
-    plt.show()
+    
 
-     # Create a 3D plot
-    fig1 = plt.figure()
+    # Show the plot
+    # plt.show()
+    #save the figure
+    fig.savefig("points_surface_"+descriptor+".png")
+
+    # Create a 3D plot
+    fig1 = plt.figure(figsize=(12, 10))
     ax1 = fig1.add_subplot(111, projection='3d')
     ax1.axes.set_xlim3d(left=-1, right=1) 
     ax1.axes.set_ylim3d(bottom=-1, top=1) 
     ax1.axes.set_zlim3d(bottom=-1, top=1) 
 
     #fix the perspective of the plot
-    ax1.view_init(elev=135, azim=-95)
+    ax1.view_init(elev=122, azim=-90)
 
     # Plot the points
     ax1.scatter(points_canonical[:, 0], points_canonical[:, 1], points_canonical[:, 2],marker='.')
@@ -120,5 +133,30 @@ if __name__ == '__main__':
     ax1.set_zlabel('Z Label')
 
     # Show the plot
-    plt.show()
+    # plt.show()
+    #save the figure
+    fig1.savefig("points_canonical_"+descriptor+".png")
 
+
+    #plot the gt
+    # Create a 3D plot
+    fig2 = plt.figure(figsize=(12, 10))
+    ax2 = fig2.add_subplot(111, projection='3d')
+    ax2.axes.set_xlim3d(left=-1, right=1)
+    ax2.axes.set_ylim3d(bottom=-1, top=1)
+    ax2.axes.set_zlim3d(bottom=-1, top=1)
+
+    #fix the perspective of the plot
+    ax2.view_init(elev=122, azim=-90)
+
+    # Plot the points
+    ax2.scatter(points_gt[:, 0], points_gt[:, 1], points_gt[:, 2],marker='.')
+    # Set labels for axes
+    ax2.set_xlabel('X Label')
+    ax2.set_ylabel('Y Label')
+    ax2.set_zlabel('Z Label')
+
+    # Show the plot
+    # plt.show()
+    # save the figure
+    fig2.savefig("points_gt_"+descriptor+".png")
