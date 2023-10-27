@@ -34,9 +34,9 @@ if __name__ == '__main__':
     from sdf.provider import SDFDatasetTestPreencoder
     from loss import mape_loss
 
-    model = SDFNetworkWithSubspaceInputOnlyForPreencoder(encoding="hashgrid",num_layers=5,num_layers_pre=5, subspace_size=7)
+    model = SDFNetworkWithSubspaceInput(encoding="hashgrid",num_layers=5,num_layers_pre=5, subspace_size=7)
     #load model from"trainedENDTOEND.pth"
-    model.load_state_dict(torch.load("WorkSpaceFolder/trainOnlyPreencoderSDLoss.pth"))
+    model.load_state_dict(torch.load("WorkSpaceFolder/trainedENDTOENDFullArcSDLOSS.pth"))
     model.cuda()
 
     from sdf.provider import SDFDatasetTestPreencoder,SDFDatasetTestPreencoderEndToEnd

@@ -2,8 +2,15 @@ __pycache__/
 build/
 *.egg-info/
 *.so
+*.png
+*.ply
+*.txt
+*.tar
+*.pth
+
 
 tmp*
+events*
 data/
 trial*/
 .vs/

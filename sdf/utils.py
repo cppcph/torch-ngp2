@@ -172,6 +172,27 @@ def compute_sd_and_grad(mesh, samples: np.ndarray):
         # -----------------------------------------------------
         return sd, sd_grad
 
+def transfer_encoder_weights(source_model, target_model):
+    source_state_dict = source_model.state_dict()
+    target_state_dict = target_model.state_dict()
+
+    encoder_keys = [key for key in source_state_dict if "encoder" in key]
+    for key in encoder_keys:
+        target_state_dict[key] = source_state_dict[key]
+
+    target_model.load_state_dict(target_state_dict)
+
+
+def transfer_backbone_weights(source_model, target_model):
+    source_state_dict = source_model.state_dict()
+    target_state_dict = target_model.state_dict()
+
+    backbone_keys = [key for key in source_state_dict if "backbone" in key]
+    for key in backbone_keys:
+        target_state_dict[key] = source_state_dict[key]
+
+    target_model.load_state_dict(target_state_dict)
+
 class Trainer(object):
     def __init__(self, 
                  name, # name of this experiment
@@ -1847,10 +1868,27 @@ class TrainerTestPreencoder(object):
         #calculate the L1 loss between pred_warping and X0 and multiply by flag
         loss_warping= torch.mean(torch.abs(pred_warping-X0)*flag)
 
-        # loss_warping= self.criterion(pred_warping, X)      
-        loss = loss_warping
+        #loss for outside of boundary -1 and 1 for warping
+        loss_boundary= torch.mean(torch.abs(pred_warping)**10)
 
-        return pred_sdf, y, loss, loss_sd, loss_warping
+             
+        
+        # randomly generate points between -1 and 1
+        num_sample_canonical= 2**10
+        X_c= torch.rand(num_sample_canonical,3,device= self.device)*2-1
+        subspace_canonical= torch.zeros(num_sample_canonical,subspaces.shape[1],device= self.device)
+        subspace_canonical[:,0]= 1
+        pred_rand, X_c_p= self.model(X_c,subspace_canonical)
+        loss_canonical= torch.mean(torch.abs(X_c-X_c_p))
+
+        # loss_warping= self.criterion(pred_warping, X)      
+        # loss =loss_warping+loss_canonical+loss_sd+ loss_boundary
+        loss = loss_sd+ loss_boundary
+        
+        loss_warping_max= torch.max(torch.abs(pred_warping-X0)*flag)     
+
+
+        return pred_sdf, y, loss, loss_sd, loss_warping,loss_canonical,loss_warping_max,loss_boundary
 
     def eval_step(self, data):
         return self.train_step(data)
@@ -1980,7 +2018,7 @@ class TrainerTestPreencoder(object):
 
             start.record()
             with torch.cuda.amp.autocast(enabled=self.fp16):
-                preds, truths, loss,loss_sd, loss_warping= self.train_step(data)
+                preds, truths, loss,loss_sd, loss_warping,loss_canonical,loss_warping_max,loss_boundary= self.train_step(data)
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -2002,8 +2040,14 @@ class TrainerTestPreencoder(object):
             if self.use_tensorboardX:
                 loss_sd_val = loss_sd.item()
                 loss_warping_val = loss_warping.item()
+                loss_canonical_val= loss_canonical.item()
+                loss_warping_max_val= loss_warping_max.item()
+                loss_boundary_val= loss_boundary.item()
                 self.writer.add_scalar("train/loss_sd", loss_sd_val, self.global_step)
                 self.writer.add_scalar("train/loss_warping", loss_warping_val, self.global_step)
+                self.writer.add_scalar("train/loss_warping_max", loss_warping_max_val, self.global_step)
+                self.writer.add_scalar("train/loss_canonical", loss_canonical_val, self.global_step)
+                self.writer.add_scalar("train/loss_boundary", loss_boundary_val, self.global_step)
                
 
             if self.local_rank == 0:
@@ -2048,7 +2092,10 @@ class TrainerTestPreencoder(object):
         total_loss = 0
         total_loss_sd = 0
         total_loss_warping = 0
-        
+        total_loss_warping_max=0
+        total_loss_canonical = 0
+        total_loss_boundary=0   
+
         if self.local_rank == 0:
             for metric in self.metrics:
                 metric.clear()
@@ -2070,7 +2117,7 @@ class TrainerTestPreencoder(object):
                     self.ema.copy_to()
             
                 with torch.cuda.amp.autocast(enabled=self.fp16):
-                    preds, truths, loss, loss_sd, loss_warping= self.eval_step(data)
+                    preds, truths, loss, loss_sd, loss_warping, loss_canonical,loss_warping_max,loss_boundary= self.eval_step(data)
 
                 if self.ema is not None:
                     self.ema.restore()
@@ -2093,10 +2140,14 @@ class TrainerTestPreencoder(object):
 
                 loss_sd_val = loss_sd.item()
                 loss_warping_val = loss_warping.item()
+                loss_canonical_val= loss_canonical.item()
+                loss_warping_max_val= loss_warping_max.item()
 
                 total_loss_sd += loss_sd_val
                 total_loss_warping += loss_warping_val
-
+                total_loss_canonical += loss_canonical_val
+                total_loss_warping_max += loss_warping_max_val
+                total_loss_boundary += loss_boundary.item()
 
                 # only rank = 0 will perform evaluation.
                 if self.local_rank == 0:
@@ -2110,12 +2161,18 @@ class TrainerTestPreencoder(object):
         average_loss = total_loss / self.local_step
         average_loss_sd = total_loss_sd / self.local_step
         average_loss_warping = total_loss_warping / self.local_step
+        average_loss_canonical = total_loss_canonical / self.local_step
+        average_loss_warping_max = total_loss_warping_max / self.local_step
+        average_loss_boundary = total_loss_boundary / self.local_step
 
         self.stats["valid_loss"].append(average_loss)
         if self.use_tensorboardX and self.local_rank == 0:
-            self.writer.add_scalar("evaluate/loss", average_loss, self.epoch)
-            self.writer.add_scalar("evaluate/loss_sd", average_loss_sd, self.epoch)
-            self.writer.add_scalar("evaluate/loss_warping", average_loss_warping, self.epoch)
+            self.writer.add_scalar("evaluate/loss", average_loss, 100* self.epoch)
+            self.writer.add_scalar("evaluate/loss_sd", average_loss_sd,100* self.epoch)
+            self.writer.add_scalar("evaluate/loss_warping", average_loss_warping,100* self.epoch)
+            self.writer.add_scalar("evaluate/loss_canonical", average_loss_canonical,100* self.epoch)
+            self.writer.add_scalar("evaluate/loss_warping_max", average_loss_warping_max,100* self.epoch)
+            self.writer.add_scalar("evaluate/loss_boundary", average_loss_boundary,100* self.epoch)
 
         if self.local_rank == 0:
             pbar.close()
