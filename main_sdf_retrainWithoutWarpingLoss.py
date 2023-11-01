@@ -10,7 +10,7 @@ if __name__ == '__main__':
     parser.add_argument('--test', action='store_true', help="test mode")
     parser.add_argument('--workspace', type=str, default='workspace')
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--lr', type=float, default=1e-2, help="initial learning rate")
+    parser.add_argument('--lr', type=float, default=1e-3, help="initial learning rate")
     parser.add_argument('--fp16', action='store_true', help="use amp mixed precision training")
     parser.add_argument('--ff', action='store_true', help="use fully-fused MLP")
     parser.add_argument('--tcnn', action='store_true', help="use TCNN backend")
@@ -32,6 +32,11 @@ if __name__ == '__main__':
         from sdf.netowrk import SDFNetwork,SDFNetworkWithSubspaceInput,SDFNetworkWithSubspaceInputOnlyForPreencoder
     #train a perfect sdf model with 5 layers without subspace and preencoder
     model_sdf=SDFNetwork(encoding="hashgrid",num_layers=5)
+    #randomly initialize the model
+    for layer in model_sdf.modules():
+        if isinstance(layer, nn.Linear):
+            nn.init.xavier_normal_(layer.weight)
+
     #train from scratch
     
     from sdf.provider import SDFDataset
@@ -48,7 +53,7 @@ if __name__ == '__main__':
             {'name': 'encoding', 'params': model.encoder.parameters()},
             {'name': 'net', 'params': model.backbone.parameters(), 'weight_decay': 1e-6},
         ], lr=opt.lr, betas=(0.9, 0.99), eps=1e-15)
-    scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
     time_stamp=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     name="WorkSpaceFolder/"+"sdf_Reference"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
 
@@ -56,7 +61,7 @@ if __name__ == '__main__':
                            fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest',
                             eval_interval=1,use_tensorboardX=True,mesh=train_dataset0.mesh)
 
-    trainer0.train(train_loader0, valid_loader0, 100)
+    trainer0.train(train_loader0, valid_loader0, 20)
     #save model
     torch.save(model_sdf.state_dict(), name+".pth")
 

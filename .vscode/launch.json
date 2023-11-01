@@ -1,0 +1,43 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "TCNN Sinus warmstart test",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "args": [
+                "data/cow.obj",
+                "--fp16","--tcnn",
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Subspace test",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "args": [
+                "data/cow.obj",                
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "TCNN Sinus original ngp test",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "args": [
+                "data/sinus_cow.obj",
+                "--fp16","--tcnn",
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

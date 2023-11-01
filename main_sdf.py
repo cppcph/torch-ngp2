@@ -42,13 +42,13 @@ if __name__ == '__main__':
         from sdf.provider import SDFDataset
         from loss import mape_loss
 
-        train_dataset = SDFDataset(opt.path, size=100, num_samples=2**15)
+        train_dataset = SDFDataset(opt.path, size=100, num_samples=2**14)
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
 
-        valid_dataset = SDFDataset(opt.path, size=1, num_samples=2**15) # just a dummy
+        valid_dataset = SDFDataset(opt.path, size=1, num_samples=2**14) # just a dummy
         valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=1)
 
-        criterion = mape_loss # torch.nn.L1Loss()
+        criterion = torch.nn.L1Loss()
 
         optimizer = lambda model: torch.optim.Adam([
             {'name': 'encoding', 'params': model.encoder.parameters()},
