@@ -123,6 +123,22 @@ def seed_everything(seed):
     #torch.backends.cudnn.deterministic = True
     #torch.backends.cudnn.benchmark = True
 
+def extract_fields0(bound_min, bound_max, resolution, query_func):
+    N = 64
+    X = torch.linspace(bound_min[0], bound_max[0], resolution).split(N)
+    Y = torch.linspace(bound_min[1], bound_max[1], resolution).split(N)
+    Z = torch.linspace(bound_min[2], bound_max[2], resolution).split(N)
+
+    u = np.zeros([resolution, resolution, resolution], dtype=np.float32)
+    with torch.no_grad():
+        for xi, xs in enumerate(X):
+            for yi, ys in enumerate(Y):
+                for zi, zs in enumerate(Z):
+                    xx, yy, zz = custom_meshgrid(xs, ys, zs)
+                    pts = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1) # [N, 3]
+                    val = query_func(pts).reshape(len(xs), len(ys), len(zs)).detach().cpu().numpy() # [N, 1] --> [x, y, z]
+                    u[xi * N: xi * N + len(xs), yi * N: yi * N + len(ys), zi * N: zi * N + len(zs)] = val
+    return u
 
 def extract_fields(bound_min, bound_max, resolution, query_func):
     N = 64
@@ -145,6 +161,20 @@ def extract_fields(bound_min, bound_max, resolution, query_func):
 def extract_geometry(bound_min, bound_max, resolution, threshold, query_func):
     #print('threshold: {}'.format(threshold))
     u = extract_fields(bound_min, bound_max, resolution, query_func)
+
+    #print(u.shape, u.max(), u.min(), np.percentile(u, 50))
+    
+    vertices, triangles = mcubes.marching_cubes(u, threshold)
+
+    b_max_np = bound_max.detach().cpu().numpy()
+    b_min_np = bound_min.detach().cpu().numpy()
+
+    vertices = vertices / (resolution - 1.0) * (b_max_np - b_min_np)[None, :] + b_min_np[None, :]
+    return vertices, triangles
+
+def extract_geometry0(bound_min, bound_max, resolution, threshold, query_func):
+    #print('threshold: {}'.format(threshold))
+    u = extract_fields0(bound_min, bound_max, resolution, query_func)
 
     #print(u.shape, u.max(), u.min(), np.percentile(u, 50))
     
@@ -402,7 +432,7 @@ class Trainer(object):
         bounds_min = torch.FloatTensor([-1, -1, -1])
         bounds_max = torch.FloatTensor([1, 1, 1])
 
-        vertices, triangles = extract_geometry(bounds_min, bounds_max, resolution=resolution, threshold=0, query_func=query_func)
+        vertices, triangles = extract_geometry0(bounds_min, bounds_max, resolution=resolution, threshold=0, query_func=query_func)
 
         mesh = trimesh.Trimesh(vertices, triangles, process=False) # important, process=True leads to seg fault...
         mesh.export(save_path)
@@ -451,7 +481,7 @@ class Trainer(object):
     def train(self, train_loader, valid_loader, max_epochs):
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer = tensorboardX.SummaryWriter(os.path.join(self.workspace, "run", self.name))
-        
+        self.evaluate_one_epoch(valid_loader)
         for epoch in range(self.epoch + 1, max_epochs + 1):
             self.epoch = epoch
 
@@ -673,9 +703,9 @@ class Trainer(object):
         self.stats["valid_loss"].append(average_loss)
 
         if self.use_tensorboardX and self.local_rank == 0:
-            self.writer.add_scalar("evaluate/loss", average_loss, 100* self.epoch)
-            self.writer.add_scalar("evaluate/loss_sd_grid_val", average_loss_sd_grid_val,100* self.epoch)
-            self.writer.add_scalar("evaluate/loss_sd_surface_val",average_loss_sd_surface_val,100* self.epoch)
+            self.writer.add_scalar("evaluate/loss", average_loss,  self.epoch)
+            self.writer.add_scalar("evaluate/loss_sd_grid_val", average_loss_sd_grid_val, self.epoch)
+            self.writer.add_scalar("evaluate/loss_sd_surface_val",average_loss_sd_surface_val, self.epoch)
 
         if self.local_rank == 0:
             pbar.close()
@@ -994,15 +1024,19 @@ class TrainerWithFixedSubspace(object):
 
         def query_func(pts):
             pts = pts.to(self.device)
+            #repeat the subspace as the size of pts
+            subspace= torch.tensor(self.subspace,device= self.device).float()
+            subspace_rep= subspace.repeat(pts.shape[0],1)
+
             with torch.no_grad():
                 with torch.cuda.amp.autocast(enabled=self.fp16):
-                    sdfs = self.model(pts)
+                    sdfs,_ = self.model(pts,subspace_rep)
             return sdfs
 
         bounds_min = torch.FloatTensor([-1, -1, -1])
         bounds_max = torch.FloatTensor([1, 1, 1])
 
-        vertices, triangles = extract_geometry(bounds_min, bounds_max, resolution=resolution, threshold=0, query_func=query_func)
+        vertices, triangles = extract_geometry0(bounds_min, bounds_max, resolution=resolution, threshold=0, query_func=query_func)
 
         mesh = trimesh.Trimesh(vertices, triangles, process=False) # important, process=True leads to seg fault...
         mesh.export(save_path)
@@ -1051,7 +1085,7 @@ class TrainerWithFixedSubspace(object):
     def train(self, train_loader, valid_loader, max_epochs):
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer = tensorboardX.SummaryWriter(os.path.join(self.workspace, "run", self.name))
-        
+        self.evaluate_one_epoch(valid_loader)
         for epoch in range(self.epoch + 1, max_epochs + 1):
             self.epoch = epoch
 
@@ -1275,9 +1309,9 @@ class TrainerWithFixedSubspace(object):
 
         self.stats["valid_loss"].append(average_loss)
         if self.use_tensorboardX and self.local_rank == 0:
-            self.writer.add_scalar("evaluate/loss", average_loss, 100* self.epoch)
-            self.writer.add_scalar("evaluate/loss_sd_grid_val", average_loss_sd_grid_val,100* self.epoch)
-            self.writer.add_scalar("evaluate/loss_sd_surface_val",average_loss_sd_surface_val,100* self.epoch)
+            self.writer.add_scalar("evaluate/loss", average_loss,  self.epoch)
+            self.writer.add_scalar("evaluate/loss_sd_grid_val", average_loss_sd_grid_val, self.epoch)
+            self.writer.add_scalar("evaluate/loss_sd_surface_val",average_loss_sd_surface_val, self.epoch)
 
         if self.local_rank == 0:
             pbar.close()
@@ -2361,6 +2395,7 @@ class TrainerTestPreencoder(object):
                  use_checkpoint="latest", # which ckpt to use at init time
                  use_tensorboardX=True, # whether to use tensorboard for logging
                  scheduler_update_every_step=False, # whether to call scheduler.step() after every train step
+                 subspace =np.array([[1,0,0,0,0,0,0]])
                  ):
         
         self.name = name
@@ -2383,6 +2418,7 @@ class TrainerTestPreencoder(object):
         self.device = device if device is not None else torch.device(f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu')
         self.console = Console()
         self.mesh = mesh
+        self.subspace= subspace
 
         model.to(self.device)
         if self.world_size > 1:
@@ -2458,6 +2494,46 @@ class TrainerTestPreencoder(object):
                 self.log(f"[INFO] Loading {self.use_checkpoint} ...")
                 self.load_checkpoint(self.use_checkpoint)
 
+        if self.use_tensorboardX:
+            self._reference_grid_(17)
+            self._reference_surface_(2**10)
+    def _reference_grid_ (self, num_samples_per_dim: int): 
+        #sample points on a grid
+        x = np.linspace(-0.97, 0.97, num_samples_per_dim)
+        y = np.linspace(-0.97, 0.97, num_samples_per_dim)
+        z = np.linspace(-0.97, 0.97, num_samples_per_dim)
+        xv, yv, zv = np.meshgrid(x, y, z)
+        points= np.stack([xv,yv,zv],axis=3).reshape(-1,3)
+        #calculate the sdf and gradient of grid points from mesh
+        grid_sdf,grid_gradients= compute_sd_and_grad(self.mesh,points)
+        # make points torch tensor
+        self.reference_grid_points=  torch.tensor(points,device= self.device).float()
+        self.reference_grid_sdf=torch.tensor(grid_sdf,device= self.device)
+        #convert grid sdf to float
+        self.reference_grid_sdf= self.reference_grid_sdf.float()
+
+        self.reference_grid_gradients=torch.tensor(grid_gradients,device= self.device)
+        #convert grid gradient to float
+        self.reference_grid_gradients= self.reference_grid_gradients.float()
+    
+    def _reference_surface_ (self, num_samples: int):
+        sdfs = np.zeros((num_samples, 1))
+        # sample surface
+        points,triangle_id = trimesh.sample.sample_surface_even(self.mesh,num_samples)
+
+        # compute the barycentric coordinates of each sample
+        bary = trimesh.triangles.points_to_barycentric(
+        triangles=self.mesh.triangles[triangle_id], points=points)
+        # interpolate vertex normals from barycentric coordinates
+        gradients = trimesh.unitize((self.mesh.vertex_normals[self.mesh.faces[triangle_id]] *
+                                trimesh.unitize(bary).reshape(
+                                    (-1, 3, 1))).sum(axis=1))
+        self.reference_surface_sdf=torch.tensor(sdfs,device= self.device)
+        self.reference_surface_sdf= self.reference_surface_sdf.float()
+        self.reference_surface_points=torch.tensor(points,device= self.device).float()
+        self.reference_surface_gradients=torch.tensor(gradients,device= self.device)
+        self.reference_surface_sdf= self.reference_surface_sdf.float()
+
     def __del__(self):
         if self.log_ptr: 
             self.log_ptr.close()
@@ -2495,7 +2571,7 @@ class TrainerTestPreencoder(object):
         num_sample_canonical= 2**10
         X_c= torch.rand(num_sample_canonical,3,device= self.device)*2-1
         subspace_canonical= torch.zeros(num_sample_canonical,subspaces.shape[1],device= self.device)
-        subspace_canonical[:,0]= 1
+        # subspace_canonical[:,0]= 1 #make the first column to be one in cow case
         pred_rand, X_c_p= self.model(X_c,subspace_canonical)
         loss_canonical= torch.mean(torch.abs(X_c-X_c_p))
 
@@ -2504,9 +2580,25 @@ class TrainerTestPreencoder(object):
         # loss = loss_sd+ loss_boundary
         
         loss_warping_max= torch.max(torch.abs(pred_warping-X0)*flag)     
+        
+        subspace= self.subspace
+        subspace_rep= torch.tensor(subspace,device= self.device).float()
+        #repeat the subspace for all the points in the reference grid
+        subspace_rep= subspace_rep.repeat(self.reference_grid_points.shape[0],1)
+        
+        pred_ref_grid,_= self.model(self.reference_grid_points,subspace_rep)
+        pred_ref_grid= pred_ref_grid.squeeze()
+        self.criterionRef= nn.L1Loss()
+        loss_sd_ref_grid= self.criterionRef(pred_ref_grid,self.reference_grid_sdf)
 
+        subspace_rep= torch.tensor(subspace,device= self.device).float()
+        #repeat the subspace for all the points in the reference grid
+        subspace_rep= subspace_rep.repeat(self.reference_surface_points.shape[0],1)
+        pred_ref_surface,_= self.model(self.reference_surface_points,subspace_rep)
+        pred_ref_surface= pred_ref_surface.squeeze()
+        loss_sd_ref_surface= self.criterionRef(pred_ref_surface,self.reference_surface_sdf)
 
-        return pred_sdf, y, loss, loss_sd, loss_warping,loss_canonical,loss_warping_max,loss_boundary
+        return pred_sdf, y, loss, loss_sd, loss_warping,loss_canonical,loss_warping_max,loss_boundary,loss_sd_ref_grid,loss_sd_ref_surface
 
     def eval_step(self, data):
         return self.train_step(data)
@@ -2553,6 +2645,8 @@ class TrainerTestPreencoder(object):
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer = tensorboardX.SummaryWriter(os.path.join(self.workspace, "run", self.name))
         
+        self.evaluate_one_epoch(valid_loader)
+
         for epoch in range(self.epoch + 1, max_epochs + 1):
             self.epoch = epoch
 
@@ -2636,7 +2730,7 @@ class TrainerTestPreencoder(object):
 
             start.record()
             with torch.cuda.amp.autocast(enabled=self.fp16):
-                preds, truths, loss,loss_sd, loss_warping,loss_canonical,loss_warping_max,loss_boundary= self.train_step(data)
+                preds, truths, loss,loss_sd, loss_warping,loss_canonical,loss_warping_max,loss_boundary,loss_sd_ref_grid,loss_sd_ref_surface= self.train_step(data)
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -2661,12 +2755,17 @@ class TrainerTestPreencoder(object):
                 loss_canonical_val= loss_canonical.item()
                 loss_warping_max_val= loss_warping_max.item()
                 loss_boundary_val= loss_boundary.item()
+                loss_sd_ref_grid_val= loss_sd_ref_grid.item()
+                loss_sd_ref_surface_val= loss_sd_ref_surface.item()
+
+
                 self.writer.add_scalar("train/loss_sd", loss_sd_val, self.global_step)
                 self.writer.add_scalar("train/loss_warping", loss_warping_val, self.global_step)
                 self.writer.add_scalar("train/loss_warping_max", loss_warping_max_val, self.global_step)
                 self.writer.add_scalar("train/loss_canonical", loss_canonical_val, self.global_step)
                 self.writer.add_scalar("train/loss_boundary", loss_boundary_val, self.global_step)
-               
+                self.writer.add_scalar("train/loss_sd_ref_grid", loss_sd_ref_grid_val, self.global_step)
+                self.writer.add_scalar("train/loss_sd_ref_surface", loss_sd_ref_surface_val, self.global_step)
 
             if self.local_rank == 0:
                 if self.report_metric_at_train:
@@ -2713,6 +2812,9 @@ class TrainerTestPreencoder(object):
         total_loss_warping_max=0
         total_loss_canonical = 0
         total_loss_boundary=0   
+        total_loss_sd_ref_grid=0
+        total_loss_sd_ref_surface=0
+
 
         if self.local_rank == 0:
             for metric in self.metrics:
@@ -2735,7 +2837,7 @@ class TrainerTestPreencoder(object):
                     self.ema.copy_to()
             
                 with torch.cuda.amp.autocast(enabled=self.fp16):
-                    preds, truths, loss, loss_sd, loss_warping, loss_canonical,loss_warping_max,loss_boundary= self.eval_step(data)
+                    preds, truths, loss, loss_sd, loss_warping, loss_canonical,loss_warping_max,loss_boundary,loss_sd_ref_grid,loss_sd_ref_surface= self.eval_step(data)
 
                 if self.ema is not None:
                     self.ema.restore()
@@ -2761,11 +2863,16 @@ class TrainerTestPreencoder(object):
                 loss_canonical_val= loss_canonical.item()
                 loss_warping_max_val= loss_warping_max.item()
 
+
                 total_loss_sd += loss_sd_val
                 total_loss_warping += loss_warping_val
                 total_loss_canonical += loss_canonical_val
                 total_loss_warping_max += loss_warping_max_val
                 total_loss_boundary += loss_boundary.item()
+                total_loss_sd_ref_grid += loss_sd_ref_grid.item()
+                total_loss_sd_ref_surface += loss_sd_ref_surface.item()
+
+
 
                 # only rank = 0 will perform evaluation.
                 if self.local_rank == 0:
@@ -2782,15 +2889,19 @@ class TrainerTestPreencoder(object):
         average_loss_canonical = total_loss_canonical / self.local_step
         average_loss_warping_max = total_loss_warping_max / self.local_step
         average_loss_boundary = total_loss_boundary / self.local_step
+        average_loss_sd_ref_grid = total_loss_sd_ref_grid / self.local_step
+        average_loss_sd_ref_surface = total_loss_sd_ref_surface / self.local_step
 
         self.stats["valid_loss"].append(average_loss)
         if self.use_tensorboardX and self.local_rank == 0:
-            self.writer.add_scalar("evaluate/loss", average_loss, 100* self.epoch)
-            self.writer.add_scalar("evaluate/loss_sd", average_loss_sd,100* self.epoch)
-            self.writer.add_scalar("evaluate/loss_warping", average_loss_warping,100* self.epoch)
-            self.writer.add_scalar("evaluate/loss_canonical", average_loss_canonical,100* self.epoch)
-            self.writer.add_scalar("evaluate/loss_warping_max", average_loss_warping_max,100* self.epoch)
-            self.writer.add_scalar("evaluate/loss_boundary", average_loss_boundary,100* self.epoch)
+            self.writer.add_scalar("evaluate/loss", average_loss, self.epoch)
+            self.writer.add_scalar("evaluate/loss_sd", average_loss_sd, self.epoch)
+            self.writer.add_scalar("evaluate/loss_warping", average_loss_warping, self.epoch)
+            self.writer.add_scalar("evaluate/loss_canonical", average_loss_canonical, self.epoch)
+            self.writer.add_scalar("evaluate/loss_warping_max", average_loss_warping_max, self.epoch)
+            self.writer.add_scalar("evaluate/loss_boundary", average_loss_boundary, self.epoch)
+            self.writer.add_scalar("evaluate/loss_sd_ref_grid", average_loss_sd_ref_grid, self.epoch)
+            self.writer.add_scalar("evaluate/loss_sd_ref_surface", average_loss_sd_ref_surface, self.epoch)
 
         if self.local_rank == 0:
             pbar.close()
