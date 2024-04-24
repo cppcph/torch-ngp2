@@ -32,12 +32,17 @@ if __name__ == '__main__':
         from sdf.netowrk import SDFNetwork,SDFNetworkWithSubspaceInput,SDFNetworkWithSubspaceInputOnlyForPreencoder
     #train a perfect sdf model with 5 layers without subspace and preencoder
     model_sdf=SDFNetwork(encoding="hashgrid",num_layers=5)
+    #randomly initialize the model
+    for layer in model_sdf.modules():
+        if isinstance(layer, nn.Linear):
+            nn.init.xavier_normal_(layer.weight)
+
     #train from scratch
     
-    from sdf.provider import SDFDataset
-    train_dataset0=SDFDataset("data/cow.obj", size=1, num_samples=2**14)
+    from sdf.provider import SDFDatasetNoNormalization,SDFDatasetTestPreencoder
+    train_dataset0=SDFDatasetNoNormalization("SMPLTemplateNormalized.obj", size=100, num_samples=2**14)
     train_loader0 = torch.utils.data.DataLoader(train_dataset0, batch_size=1, shuffle=True)
-    valid_dataset0 = SDFDataset("data/cow.obj", size=1, num_samples=2**14) # just a dummy
+    valid_dataset0 = SDFDatasetNoNormalization("SMPLTemplateNormalized.obj", size=1, num_samples=2**14) # just a dummy
     valid_loader0 = torch.utils.data.DataLoader(valid_dataset0, batch_size=1)
     from loss import mape_loss
     # criterion = mape_loss
@@ -48,21 +53,37 @@ if __name__ == '__main__':
             {'name': 'encoding', 'params': model.encoder.parameters()},
             {'name': 'net', 'params': model.backbone.parameters(), 'weight_decay': 1e-6},
         ], lr=opt.lr, betas=(0.9, 0.99), eps=1e-15)
-    scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
     time_stamp=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-    name="WorkSpaceFolder/"+"sdf_Reference"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
+    name="SMPLmini/"+"OOsdf_Reference"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
 
     trainer0 = Trainer('ngp', model_sdf, workspace=name, optimizer=optimizer, criterion=criterion, ema_decay=0.95,
                            fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest',
                             eval_interval=1,use_tensorboardX=True,mesh=train_dataset0.mesh)
 
-    trainer0.train(train_loader0, valid_loader0, 100)
+    # trainer0.train(train_loader0, valid_loader0, 100)
     #save model
-    torch.save(model_sdf.state_dict(), name+".pth")
+    # torch.save(model_sdf.state_dict(), name+".pth")
+    # trainer0.save_mesh(os.path.join('SMPL', 'canonicalSMPL.ply'), 1024)
+    #load model 'canonicalSMPL.ply'
+    model_sdf.load_state_dict(torch.load("SMPL/OOsdf_Reference.pth"))
 
+    
+    from sdf.provider import SDFDatasetSMPLMini,SDFDatasetTestPreencoderEndToEnd
     ##second part
+    # newmesh = trimesh.load("medio_cow_random_deformed_norm.obj", force='mesh')
+    newmesh = trimesh.load("SMPLOneDefNormalized2.obj", force='mesh')
+    dataset = SDFDatasetSMPLMini( size=100, num_samples=8)
+    #load the weights
+    weights=np.load("weights.npy")
+    weights[0]=10
+    #leave the weights only one 
+    weights=weights[0]
+    #Add extra dimension to weights
+    weights=weights.reshape(1,-1)
 
-    model = SDFNetworkWithSubspaceInputOnlyForPreencoder(encoding="hashgrid",num_layers=5,num_layers_pre=5, subspace_size=7)
+
+    model = SDFNetworkWithSubspaceInputOnlyForPreencoder(encoding="hashgrid",num_layers=5,num_layers_pre=5, subspace_size=1)
 
     #match the corresponding parameters of the parts of model and model sdf
     transfer_encoder_weights(model_sdf,model)
@@ -72,47 +93,13 @@ if __name__ == '__main__':
     #load model
     # model.load_state_dict(torch.load("WorkSpaceFolder/original.pth"))
     # print(model)
-
-    
-    from sdf.provider import SDFDatasetTestPreencoder,SDFDatasetTestPreencoderEndToEnd
     
 
-    train_dataset = SDFDatasetTestPreencoderEndToEnd("mode/deformed_cow", size=100, num_samples=2**10)
+    train_dataset = SDFDatasetSMPLMini(size=10, num_samples=2**15)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
-
-    valid_dataset = SDFDatasetTestPreencoderEndToEnd("mode/deformed_cow", size=1, num_samples=2**10) # just a dummy
+    train_dataset.results["sdfs"].tofile("sdfs.bin")
+    train_dataset.results["points"].tofile("points.bin")
+    train_dataset.results["subspace"].tofile("subspace.bin")
+    train_dataset.results["reference_points_on_original_mesh"].tofile("roo.bin")
+    valid_dataset = SDFDatasetSMPLMini(size=1, num_samples=2**10) # just a dummy
     valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=1)
-
-    criterion = torch.nn.L1Loss()
-
-    optimizer = lambda model: torch.optim.Adam([
-        {'name': 'net0', 'params': model.preencoder.parameters(), 'weight_decay': 1e-6},
-        {'name': 'encoding', 'params': model.encoder.parameters()},
-        {'name': 'net', 'params': model.backbone.parameters(), 'weight_decay': 1e-6},
-        
-    ], lr=opt.lr, betas=(0.9, 0.99), eps=1e-15)
-
-    scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
-    time_stamp=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-    name="WorkSpaceFolder/"+"TrainOnlyThePreencoderWithSDFTrainedMultiLoss"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
-    
-    weights= np.array([[1,1,1,1,1,1,1]])/7
-    dataset = SDFDatasetTestPreencoder("mode/deformed_cow", size=100, num_samples=8)
-    newmesh=dataset.mesh.copy()
-    x = sum(weights[0][j] * dataset.vs[j] for j in range(len(dataset.vs)))
-    newmesh.vertices = x
-
-    trainer = TrainerTestPreencoder('ngp', model, workspace=name, optimizer=optimizer, criterion=criterion, ema_decay=0.95,
-                        fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest',
-                        eval_interval=1,use_tensorboardX=True,mesh=newmesh)
-
-    trainer.train(train_loader, valid_loader, 100)
-
-    # also test
-    # trainer.save_mesh(os.path.join(opt.workspace, 'results', 'sinus_original_output.ply'), 1024)
-
-
-    #save model
-    layer_to_save= {'preencoder':model.preencoder.state_dict()}
-    torch.save(model.state_dict(), name+".pth")
-    torch.save(layer_to_save, name+"pre.pth")

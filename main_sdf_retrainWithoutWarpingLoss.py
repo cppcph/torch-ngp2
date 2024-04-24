@@ -10,7 +10,7 @@ if __name__ == '__main__':
     parser.add_argument('--test', action='store_true', help="test mode")
     parser.add_argument('--workspace', type=str, default='workspace')
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--lr', type=float, default=1e-3, help="initial learning rate")
+    parser.add_argument('--lr', type=float, default=1e-2, help="initial learning rate")
     parser.add_argument('--fp16', action='store_true', help="use amp mixed precision training")
     parser.add_argument('--ff', action='store_true', help="use fully-fused MLP")
     parser.add_argument('--tcnn', action='store_true', help="use TCNN backend")
@@ -39,10 +39,10 @@ if __name__ == '__main__':
 
     #train from scratch
     
-    from sdf.provider import SDFDataset
-    train_dataset0=SDFDataset("data/cow.obj", size=100, num_samples=2**14)
+    from sdf.provider import SDFDataset,SDFDatasetTestPreencoder
+    train_dataset0=SDFDataset("medio_cow_sinus_deformed_norm_high_freq.obj", size=1, num_samples=2**14)
     train_loader0 = torch.utils.data.DataLoader(train_dataset0, batch_size=1, shuffle=True)
-    valid_dataset0 = SDFDataset("data/cow.obj", size=1, num_samples=2**14) # just a dummy
+    valid_dataset0 = SDFDataset("medio_cow_sinus_deformed_norm_high_freq.obj", size=1, num_samples=2**14) # just a dummy
     valid_loader0 = torch.utils.data.DataLoader(valid_dataset0, batch_size=1)
     from loss import mape_loss
     # criterion = mape_loss
@@ -53,19 +53,26 @@ if __name__ == '__main__':
             {'name': 'encoding', 'params': model.encoder.parameters()},
             {'name': 'net', 'params': model.backbone.parameters(), 'weight_decay': 1e-6},
         ], lr=opt.lr, betas=(0.9, 0.99), eps=1e-15)
-    scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+    scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
     time_stamp=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-    name="WorkSpaceFolder/"+"sdf_Reference"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
+    name="ForTensorboard5/"+"OOsdf_Reference"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
 
     trainer0 = Trainer('ngp', model_sdf, workspace=name, optimizer=optimizer, criterion=criterion, ema_decay=0.95,
                            fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest',
                             eval_interval=1,use_tensorboardX=True,mesh=train_dataset0.mesh)
 
-    trainer0.train(train_loader0, valid_loader0, 20)
+    trainer0.train(train_loader0, valid_loader0, 100)
     #save model
     torch.save(model_sdf.state_dict(), name+".pth")
 
+    
+    from sdf.provider import SDFDatasetTestPreencoder,SDFDatasetTestPreencoderEndToEnd
     ##second part
+    weights= np.array([[1,0,0,0,0,0,0]])
+    dataset = SDFDatasetTestPreencoder("mode/deformed_cow", size=100, num_samples=8)
+    newmesh=dataset.mesh.copy()
+    x = sum(weights[0][j] * dataset.vs[j] for j in range(len(dataset.vs)))
+    newmesh.vertices = x
 
     model = SDFNetworkWithSubspaceInputOnlyForPreencoder(encoding="hashgrid",num_layers=5,num_layers_pre=5, subspace_size=7)
 
@@ -77,12 +84,9 @@ if __name__ == '__main__':
     #load model
     # model.load_state_dict(torch.load("WorkSpaceFolder/original.pth"))
     # print(model)
-
-    
-    from sdf.provider import SDFDatasetTestPreencoder,SDFDatasetTestPreencoderEndToEnd
     
 
-    train_dataset = SDFDatasetTestPreencoderEndToEnd("mode/deformed_cow", size=100, num_samples=2**10)
+    train_dataset = SDFDatasetTestPreencoderEndToEnd("mode/deformed_cow", size=1, num_samples=2**10)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
 
     valid_dataset = SDFDatasetTestPreencoderEndToEnd("mode/deformed_cow", size=1, num_samples=2**10) # just a dummy
@@ -97,15 +101,17 @@ if __name__ == '__main__':
         
     ], lr=opt.lr, betas=(0.9, 0.99), eps=1e-15)
 
-    scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.5)
     time_stamp=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-    name="WorkSpaceFolder/"+"subspace_by_part_"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
+    name="WorkSpaceFolder/"+"OInputOnlyForPreencoderTrainedOnlyWithPreencoder_"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
+
+    
 
     trainer = TrainerTestPreencoder('ngp', model, workspace=name, optimizer=optimizer, criterion=criterion, ema_decay=0.95,
                         fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest',
-                        eval_interval=1,use_tensorboardX=True,mesh=train_dataset.mesh)
+                        eval_interval=1,use_tensorboardX=True,mesh=train_dataset0.mesh)
 
-    trainer.train(train_loader, valid_loader, 100)
+    trainer.train(train_loader, valid_loader, 2000)
 
     # also test
     # trainer.save_mesh(os.path.join(opt.workspace, 'results', 'sinus_original_output.ply'), 1024)

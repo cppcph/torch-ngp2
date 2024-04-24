@@ -60,13 +60,19 @@ if __name__ == '__main__':
         
     ], lr=opt.lr, betas=(0.9, 0.99), eps=1e-15)
 
+    weights= np.array([[1,1,1,1,1,1,1]])/7
+    dataset = SDFDatasetTestPreencoder("mode/deformed_cow", size=100, num_samples=8)
+    newmesh=dataset.mesh.copy()
+    x = sum(weights[0][j] * dataset.vs[j] for j in range(len(dataset.vs)))
+    newmesh.vertices = x
+
     scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
     time_stamp=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     name="WorkSpaceFolder/"+"subspace_by_part_"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
 
     trainer = TrainerTestPreencoder('ngp', model, workspace=name, optimizer=optimizer, criterion=criterion, ema_decay=0.95,
                         fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest',
-                        eval_interval=1,use_tensorboardX=True,mesh=train_dataset.mesh)
+                        eval_interval=1,use_tensorboardX=True,mesh=newmesh)
 
     trainer.train(train_loader, valid_loader, 100)
 
