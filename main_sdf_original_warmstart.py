@@ -73,7 +73,8 @@ if __name__ == '__main__':
         ], lr=opt.lr, betas=(0.9, 0.99), eps=1e-15)
     scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.1)
     time_stamp=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-    name="SMPLmini/"+"OriginalWarmstart_"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
+    opt.lr= 1e-2
+    name="SMPLminiTesis/"+"OriginalWarmstart_"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
 
 
     train_dataset1= SDFDatasetNoNormalization("SMPLOneDefNormalized.obj", size=1, num_samples=2**14)
@@ -85,8 +86,8 @@ if __name__ == '__main__':
                            fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest',
                             eval_interval=1,use_tensorboardX=True,mesh=train_dataset1.mesh)
 
-    trainer1.train(train_loader1, valid_loader1, 50)
-    trainer1.save_mesh(os.path.join('SMPLmini',"mesh", 'canonicalSMPL50.ply'), 1024)
+    trainer1.train(train_loader1, valid_loader1, 400)
+    trainer1.save_mesh(os.path.join('SMPLminiTesis',"mesh", 'warmstartSMPL400.ply'), 1024)
 
 
 

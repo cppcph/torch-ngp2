@@ -96,10 +96,14 @@ if __name__ == '__main__':
     
 
     train_dataset = SDFDatasetSMPLMini(size=10, num_samples=2**15)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
-    train_dataset.results["sdfs"].tofile("sdfs.bin")
-    train_dataset.results["points"].tofile("points.bin")
-    train_dataset.results["subspace"].tofile("subspace.bin")
-    train_dataset.results["reference_points_on_original_mesh"].tofile("roo.bin")
-    valid_dataset = SDFDatasetSMPLMini(size=1, num_samples=2**10) # just a dummy
-    valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=1)
+    # train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
+    # train_dataset.results["sdfs"].tofile("sdfs.bin")
+    # train_dataset.results["points"].tofile("points.bin")
+    # train_dataset.results["subspace"].tofile("subspace.bin")
+    # train_dataset.results["reference_points"].tofile("roo.bin")
+    # valid_dataset = SDFDatasetSMPLMini(size=1, num_samples=2**10) # just a dummy
+    # valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=1)
+
+    single_instance = train_dataset.one_single_case()
+    single_instance["sdfs"].tofile("sdfs_single_instance.bin")
+    single_instance["points_with_weights"].tofile("points_with_weights.bin")

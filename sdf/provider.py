@@ -663,121 +663,103 @@ class SDFDatasetSMPL(Dataset):
 
 
 class SDFDatasetSMPLMini(Dataset):
-    def __init__(self, size=100, num_samples=2**15, clip_sdf=None,subspace_size=1):
+    def __init__(self, size=100, num_samples=2**15, clip_sdf=None, subspace_size=1):
         super().__init__()
         self.num_samples = num_samples
         assert self.num_samples % 8 == 0, "num_samples must be divisible by 8."
 
         self.size = size
-
-        self.num_samples = num_samples
-        self.subspace_size=subspace_size
-
+        self.subspace_size = subspace_size
         self.clip_sdf = clip_sdf
 
-        self.vmesh=[]
-        self.vweights=[]
-        #create empty numpy array for the 16 sdfs to concatenate
-        sdfs_all = np.empty((0, 1))
-        #create empty numpy array for the 16 points to concatenate
-        points_all = np.empty((0, 3))
-        #create empty numpy array for the 16 subspaces to concatenate
-        subspaces_all = np.empty((0, self.subspace_size))   
-        surfaceflag_all= np.empty((0, 1))
-        reference_points_on_original_mesh_all = np.empty((0, 3))
-        #load 'SMPLTemplateNormalized.obj'
+        self.vmesh = []
+        self.vweights = []
+
+        # Initializing arrays for surface, perturbed, and volume points
+        sdfs_surface, sdfs_perturbed, sdfs_volume = [], [], []
+        points_surface, points_perturbed, points_volume = [], [], []
+        subspace_surface, subspace_perturbed, subspace_volume = [], [], []
+        surfaceflag_surface, surfaceflag_perturbed, surfaceflag_volume = [], [], []
+        ref_points_surface, ref_points_perturbed, ref_points_volume = [], [], []
+
+        # Load mesh and blendshapes
         self.original_mesh = trimesh.load("SMPLTemplateNormalized.obj", force='mesh')
-        #load blendshapes
-        blendshapes = np.load("blendshape.npy")
+        self.blendshapes = np.load("blendshape.npy")
 
         for i in range(64):
-            newmesh=self.original_mesh.copy()
-            #generate a serie of random number of uniform distribution of std 1
-            weights = np.random.uniform(-20,20,subspace_size)
-            weights=weights.reshape(1,-1)
-            #make weights float
-            weights= weights.astype(np.float32)
-            #weigh the vertices with the weights
-            x = sum(weights[0,j] * blendshapes[:,:,j] for j in range(subspace_size))
-            newmesh.vertices += x
+            newmesh = self.original_mesh.copy()
+            weights = np.random.uniform(-20, 20, subspace_size).reshape(1, -1).astype(np.float32)
+            deformation = sum(weights[0, j] * self.blendshapes[:, :, j] for j in range(self.subspace_size))
+            newmesh.vertices += deformation
             newmesh.vertices *= 0.6
-            self.vweights.append(weights)         
+            self.vweights.append(weights)
             self.vmesh.append(newmesh)
 
             sdf_fn = pysdf.SDF(newmesh.vertices, newmesh.faces)
-            # offline sampling
-            offline_sample_size=2**15
-            sdfs = np.zeros((offline_sample_size, 1))
-            surfaceflag=np.zeros((offline_sample_size, 1))
-            surfaceflag[:]=1
-            reference_points_on_original_mesh=np.zeros((offline_sample_size, 3))
-            # surface
-            points_surface,triangle_id = trimesh.sample.sample_surface(self.vmesh[i], offline_sample_size)
 
-            # compute the barycentric coordinates of each sample
-            bary = trimesh.triangles.points_to_barycentric(
-            triangles=self.vmesh[i].triangles[triangle_id], points=points_surface)
-            # interpolate the position on the original mesh from barycentric coordinates
-            reference_points_on_original_mesh[0:offline_sample_size,:] = (self.original_mesh.vertices[self.original_mesh.faces[triangle_id]] *
-                                bary.reshape((-1, 3, 1))).sum(axis=1)
+            # Sampling surface points
+            surface_points, triangle_ids = trimesh.sample.sample_surface(self.vmesh[i], self.num_samples)
+            surface_sdfs = np.zeros((self.num_samples, 1))
+            barycentric_coords = trimesh.triangles.points_to_barycentric(triangles=self.vmesh[i].triangles[triangle_ids], points=surface_points)
+            ref_points = (self.original_mesh.vertices[self.original_mesh.faces[triangle_ids]] * barycentric_coords.reshape((-1, 3, 1))).sum(axis=1)
             
-            #add purturbed points
-            points_perturbed,triangle_id = trimesh.sample.sample_surface(self.vmesh[i], offline_sample_size)
-            points_perturbed+=0.01*np.random.randn(offline_sample_size,3)
-            #concatenate the purturbed points to the surface points
-            points_surface=np.concatenate((points_surface,points_perturbed),axis=0).astype(np.float32)
-
-            #calculate the sdf of the perturbed points
-            sdfs_perturbed = -sdf_fn(points_perturbed)[:,None].astype(np.float32)
-            #add the perturbed points to the sdfs
-            sdfs=np.concatenate((sdfs,sdfs_perturbed),axis=0).astype(np.float32)
-            #set the surface flag of the perturbed points to 0
-            surfaceflag_perturbed=np.zeros((offline_sample_size, 1))
-            surfaceflag=np.concatenate((surfaceflag,surfaceflag_perturbed),axis=0).astype(np.float32)
-            #set the reference points of the perturbed points to the original mesh as 0
-            reference_points_on_original_mesh_perturbed=np.zeros((offline_sample_size, 3))
-            reference_points_on_original_mesh=np.concatenate((reference_points_on_original_mesh,reference_points_on_original_mesh_perturbed),
-                                                                    axis=0).astype(np.float32)
+            # Sampling perturbed points
+            perturbed_points = surface_points + 0.01 * np.random.randn(self.num_samples, 3)
+            perturbed_sdfs = -sdf_fn(perturbed_points)[:, None]
             
-            #add random points
-            points_uniform = np.random.rand(offline_sample_size, 3) * 2 - 1
-            #concatenate the random points to the surface points
-            points_surface=np.concatenate((points_surface,points_uniform),axis=0).astype(np.float32)
-            #calculate the sdf of the random points
-            sdfs_random = -sdf_fn(points_uniform)[:,None].astype(np.float32)
-            #add the random points to the sdfs
-            sdfs=np.concatenate((sdfs,sdfs_random),axis=0).astype(np.float32)
-            #set the surface flag of the random points to 0
-            surfaceflag_random=np.zeros((offline_sample_size, 1))
-            surfaceflag=np.concatenate((surfaceflag,surfaceflag_random),axis=0).astype(np.float32)
-            #set the reference points of the random points to the original mesh as 0
-            reference_points_on_original_mesh_random=np.zeros((offline_sample_size, 3))
-            reference_points_on_original_mesh=np.concatenate((reference_points_on_original_mesh,reference_points_on_original_mesh_random),
-                                                                    axis=0).astype(np.float32)
-
+            # Sampling volume points
+            volume_points = np.random.rand(self.num_samples, 3) * 2 - 1
+            volume_sdfs = -sdf_fn(volume_points)[:, None]
             
-            subspaces = np.repeat(self.vweights[i],3*offline_sample_size,axis=0).astype(np.float32)
+            # Storing data by type
+            sdfs_surface.append(surface_sdfs); points_surface.append(surface_points); subspace_surface.append(np.repeat(weights, self.num_samples, axis=0)); surfaceflag_surface.append(np.ones((self.num_samples, 1))); ref_points_surface.append(ref_points)
+            sdfs_perturbed.append(perturbed_sdfs); points_perturbed.append(perturbed_points); subspace_perturbed.append(np.repeat(weights, self.num_samples, axis=0)); surfaceflag_perturbed.append(np.zeros((self.num_samples, 1))); ref_points_perturbed.append(np.zeros((self.num_samples, 3)))
+            sdfs_volume.append(volume_sdfs); points_volume.append(volume_points); subspace_volume.append(np.repeat(weights, self.num_samples, axis=0)); surfaceflag_volume.append(np.zeros((self.num_samples, 1))); ref_points_volume.append(np.zeros((self.num_samples, 3)))
 
-            #concatenate the sdfs,points and the subspaces for all meshes
-            sdfs_all=np.concatenate((sdfs_all,sdfs),axis=0).astype(np.float32)
-            subspaces_all=np.concatenate((subspaces_all,subspaces),axis=0).astype(np.float32)
-            points_all=np.concatenate((points_all,points_surface),axis=0).astype(np.float32)
-            surfaceflag_all=np.concatenate((surfaceflag_all,surfaceflag),axis=0).astype(np.float32)
-            reference_points_on_original_mesh_all=np.concatenate((reference_points_on_original_mesh_all,reference_points_on_original_mesh),
-                                                                 axis=0).astype(np.float32)
-            self.results ={
-            'sdfs': sdfs_all,
-            'points': points_all,
-            'subspace':subspaces_all,
-            'surface_flag':surfaceflag_all,
-            'reference_points_on_original_mesh':reference_points_on_original_mesh_all,
-        }
-        
-       
-
+        # Concatenating arrays for each type
+        self.results = {
+    'sdfs': np.concatenate([np.concatenate(sdfs_surface, axis=0),
+                            np.concatenate(sdfs_perturbed, axis=0),
+                            np.concatenate(sdfs_volume, axis=0)], axis=0).astype(np.float32),
+    'points': np.concatenate([np.concatenate(points_surface, axis=0),
+                              np.concatenate(points_perturbed, axis=0),
+                              np.concatenate(points_volume, axis=0)], axis=0).astype(np.float32),
+    'subspace': np.concatenate([np.concatenate(subspace_surface, axis=0),
+                                np.concatenate(subspace_perturbed, axis=0),
+                                np.concatenate(subspace_volume, axis=0)], axis=0).astype(np.float32),
+    'surface_flag': np.concatenate([np.concatenate(surfaceflag_surface, axis=0),
+                                    np.concatenate(surfaceflag_perturbed, axis=0),
+                                    np.concatenate(surfaceflag_volume, axis=0)], axis=0).astype(np.float32),
+    'reference_points': np.concatenate([np.concatenate(ref_points_surface, axis=0),
+                                        np.concatenate(ref_points_perturbed, axis=0),
+                                        np.concatenate(ref_points_volume, axis=0)], axis=0).astype(np.float32),
+}
     
     def __len__(self):
         return self.size
+    def one_single_case(self):
+        newmesh = self.original_mesh.copy()
+        weights = np.random.uniform(-20, 20, self.subspace_size).reshape(1, -1).astype(np.float32)
+        deformation = sum(weights[0, j] * self.blendshapes[:, :, j] for j in range(self.subspace_size))
+        newmesh.vertices += deformation
+        newmesh.vertices *= 0.6
+        # sdf_fn = pysdf.SDF(newmesh.vertices, newmesh.faces)
+
+        # Sampling surface points
+        surface_points, triangle_ids = trimesh.sample.sample_surface(newmesh, self.num_samples)
+        surface_sdfs = np.zeros((self.num_samples, 1))
+        barycentric_coords = trimesh.triangles.points_to_barycentric(triangles= newmesh.triangles[triangle_ids], points=surface_points)
+        ref_points = (self.original_mesh.vertices[self.original_mesh.faces[triangle_ids]] * barycentric_coords.reshape((-1, 3, 1))).sum(axis=1)
+        # add the weights to the end of each line of the surface points
+        weights_repeated = np.tile(weights, (surface_points.shape[0], 1))
+        surface_points_with_weights = np.hstack((surface_points, weights_repeated))
+        result={
+            "sdfs":surface_sdfs.astype(np.float32),
+            "points_with_weights":surface_points_with_weights.astype(np.float32),
+            "subspace":weights_repeated.astype(np.float32),
+            "reference_points":ref_points.astype(np.float32)
+        }
+        return result
 
     def __getitem__(self, _):
 
@@ -787,7 +769,7 @@ class SDFDatasetSMPLMini(Dataset):
         points=self.results['points'][idx]
         subspaces=self.results['subspace'][idx]
         surfaceflag=self.results['surface_flag'][idx]
-        reference_points_on_original_mesh=self.results['reference_points_on_original_mesh'][idx]
+        reference_points_on_original_mesh=self.results['reference_points'][idx]
         results = {
             'sdfs': sdfs,
             'points': points,

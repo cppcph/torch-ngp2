@@ -120,7 +120,7 @@ if __name__ == '__main__':
                         fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest',
                         eval_interval=1,use_tensorboardX=True,mesh=newmesh,subspace=weights)
 
-    trainer.train(train_loader, valid_loader, 200)
+    trainer.train(train_loader, valid_loader, 2000)
 
 
     layer_to_save= {'preencoder':model.preencoder.state_dict()}
@@ -142,7 +142,7 @@ if __name__ == '__main__':
                         fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest',
                         eval_interval=1,use_tensorboardX=True,mesh=newmesh,subspace=weights)
 
-    trainer.train(train_loader, valid_loader, 200)
+    # trainer.train(train_loader, valid_loader, 2000)
 
     layer_to_save= {'preencoder':model.preencoder.state_dict()}
     torch.save(model.state_dict(), name+".pth")
@@ -178,11 +178,11 @@ if __name__ == '__main__':
         ], lr=opt.lr, betas=(0.9, 0.99), eps=1e-15)
     scheduler = lambda optimizer: optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
     time_stamp=time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-    name="SMPLmini/"+"warmstart_OnlyNGP_"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
+    name="SMPLminiTesis/"+"SingleInstanceTrainingDrop2B"+"lr_"+str(opt.lr)+"_"+time_stamp+opt.path.split("/")[-1]
 
     trainer0 = TrainerWithFixedSubspace('ngp', model, workspace=name, optimizer=optimizer, criterion=criterion, ema_decay=0.95,
                            fp16=opt.fp16, lr_scheduler=scheduler, use_checkpoint='latest',
                             eval_interval=1,use_tensorboardX=True,mesh=newmesh,subspace=weights)
 
-    trainer0.train(train_loader0, valid_loader0, 200)
-    trainer0.save_mesh(os.path.join( 'SMPLmini', 'reconstructedSMPLDeformed200.ply'), 1024)
+    trainer0.train(train_loader0, valid_loader0, 400)
+    trainer0.save_mesh(os.path.join( 'SMPLminiTesis', 'reconstructedSMPLDeformed400Drop2B.ply'), 1024)
